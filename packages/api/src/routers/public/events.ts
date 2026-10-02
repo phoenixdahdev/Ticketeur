@@ -6,6 +6,7 @@ import { events, eventVendors, ticketTiers, user } from '@ticketur/db'
 import { createTRPCRouter, publicProcedure } from '../../trpc'
 import {
   alreadyEnded,
+  hasEnded,
   notCurrentlyBanned,
   stillRunning,
 } from '../../lib/predicates'
@@ -74,8 +75,14 @@ export const publicEventsRouter = createTRPCRouter({
       .leftJoin(ticketTiers, eq(ticketTiers.eventId, events.id))
       .where(and(...filters, notCurrentlyBanned))
       .groupBy(events.id)
-      // Upcoming: soonest first. Past: most recent first.
-      .orderBy(isPast ? desc(events.eventDate) : asc(events.eventDate))
+      // Upcoming: soonest first. Past: most recently finished first — ordered
+      // by the same date that decides whether it is past at all, so a multi-day
+      // event does not sort by a start date it outlived.
+      .orderBy(
+        isPast
+          ? desc(sql`COALESCE(${events.endDate}, ${events.eventDate})`)
+          : asc(events.eventDate)
+      )
       .limit(input.pageSize)
       .offset((input.page - 1) * input.pageSize)
 
@@ -222,20 +229,18 @@ export const publicEventsRouter = createTRPCRouter({
       // but must not sell tickets. checkout.start rejects it server-side too;
       // this flag is what lets the UI say so instead of failing on submit.
       // A TBD event (null date) is never treated as ended.
-      const today = new Date().toISOString().slice(0, 10)
-      const lastDay = event.endDate ?? event.eventDate
-      const hasEnded = lastDay !== null && lastDay < today
+      const ended = hasEnded(event)
 
       // An archived event is public only as a record of something that already
       // happened. Archived and still upcoming means the organizer pulled it.
-      if (event.status === 'archived' && !hasEnded) return null
+      if (event.status === 'archived' && !ended) return null
 
       return {
         event,
         tiers,
         vendors,
         minPriceMinor: minPrice ?? 0,
-        hasEnded,
+        hasEnded: ended,
       }
     }),
 })

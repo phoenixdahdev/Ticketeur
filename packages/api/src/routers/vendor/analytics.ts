@@ -11,6 +11,7 @@ import {
 } from '@ticketur/db'
 
 import { createTRPCRouter, vendorProcedure } from '../../trpc'
+import { alreadyEnded, stillRunning } from '../../lib/predicates'
 
 // ─── Reporting window ────────────────────────────────────────────────────────
 
@@ -205,7 +206,7 @@ export const vendorAnalyticsRouter = createTRPCRouter({
           and(
             eq(eventVendors.vendorId, vendorId),
             eq(eventVendors.status, 'accepted'),
-            sql`coalesce(${events.endDate}, ${events.eventDate}) < ${today}`
+            alreadyEnded(today)
           )
         )
         .orderBy(desc(events.eventDate))
@@ -301,7 +302,7 @@ export const vendorAnalyticsRouter = createTRPCRouter({
         .select({
           invitations: sql<number>`count(*) filter (where ${eventVendors.createdAt} >= ${w.start} and ${eventVendors.createdAt} < ${w.end})::int`,
           confirmed: sql<number>`count(*) filter (where ${eventVendors.status} = 'accepted' and ${eventVendors.createdAt} >= ${w.start} and ${eventVendors.createdAt} < ${w.end})::int`,
-          completed: sql<number>`count(*) filter (where ${eventVendors.status} = 'accepted' and ${eventVendors.createdAt} >= ${w.start} and ${eventVendors.createdAt} < ${w.end} and coalesce(${events.endDate}, ${events.eventDate}) < ${today})::int`,
+          completed: sql<number>`count(*) filter (where ${eventVendors.status} = 'accepted' and ${eventVendors.createdAt} >= ${w.start} and ${eventVendors.createdAt} < ${w.end} and ${alreadyEnded(today)})::int`,
         })
         .from(eventVendors)
         .innerJoin(events, eq(events.id, eventVendors.eventId))
@@ -376,7 +377,7 @@ export const vendorAnalyticsRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       const vendorId = ctx.session.user.id
       const today = new Date().toISOString().slice(0, 10)
-      const ended = sql`coalesce(${events.endDate}, ${events.eventDate}) < ${today}`
+      const ended = alreadyEnded(today)
 
       // Derived, display-facing status collapsed to the three the table shows.
       const statusExpr = sql<string>`case
@@ -390,7 +391,7 @@ export const vendorAnalyticsRouter = createTRPCRouter({
       } else if (input.status === 'completed') {
         statusCond = sql`${eventVendors.status} <> 'declined' and ${ended}`
       } else if (input.status === 'upcoming') {
-        statusCond = sql`${eventVendors.status} <> 'declined' and (coalesce(${events.endDate}, ${events.eventDate}) is null or coalesce(${events.endDate}, ${events.eventDate}) >= ${today})`
+        statusCond = sql`${eventVendors.status} <> 'declined' and ${stillRunning(today)}`
       }
 
       const base = eq(eventVendors.vendorId, vendorId)

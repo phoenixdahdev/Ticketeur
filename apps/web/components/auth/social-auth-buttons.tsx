@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 
 import { cn } from '@ticketur/ui/lib/utils'
 import { authClient } from '@/lib/auth-client'
+import { withNext } from '@/lib/post-login-redirect'
 
 type SocialProvider = {
   label: string
@@ -58,9 +59,14 @@ function notYetWired() {
   })
 }
 
-export function SocialAuthButtons() {
+export function SocialAuthButtons({ next }: { next?: string | null }) {
   const router = useRouter()
   const [pending, setPending] = useState(false)
+
+  // Both callbacks and the opener's own push carry `next`, so whichever path
+  // the OAuth round trip takes ends up in the same place.
+  const postLogin = withNext('/post-login', next)
+  const welcome = withNext('/welcome', next)
 
   async function continueWithGoogle() {
     setPending(true)
@@ -69,8 +75,8 @@ export function SocialAuthButtons() {
     // opener is never navigated by better-auth, so we route it ourselves.
     const { error } = await authClient.signIn.popup({
       provider: 'google',
-      callbackURL: '/post-login',
-      newUserCallbackURL: '/welcome',
+      callbackURL: postLogin,
+      newUserCallbackURL: welcome,
     })
     setPending(false)
 
@@ -78,7 +84,7 @@ export function SocialAuthButtons() {
       // /post-login resolves the destination server-side, including sending a
       // first-time social user to pick a role.
       router.refresh()
-      router.push('/post-login')
+      router.push(postLogin)
       return
     }
 
@@ -91,8 +97,8 @@ export function SocialAuthButtons() {
       // handles the new-user destination itself.
       await authClient.signIn.social({
         provider: 'google',
-        callbackURL: '/post-login',
-        newUserCallbackURL: '/welcome',
+        callbackURL: postLogin,
+        newUserCallbackURL: welcome,
       })
       return
     }

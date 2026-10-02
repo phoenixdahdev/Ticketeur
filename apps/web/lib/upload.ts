@@ -16,6 +16,8 @@ export type UploadKind =
   | 'vendor-banner'
   | 'vendor-showcase'
   | 'org-logo'
+  | 'form-image'
+  | 'form-document'
 
 export type UploadProgress = {
   loaded: number
@@ -26,6 +28,12 @@ export type UploadProgress = {
 export type UploadFileOptions = {
   kind: UploadKind
   file: File
+  // Overrides the stored file name. Registration-form uploads use it to force
+  // an extension that matches the file's real type, because the server reads
+  // the type back off the stored URL (uploadUrlError in
+  // packages/api/src/lib/form-fields.ts) and a phone can hand us a photo
+  // named with no extension at all.
+  name?: string
   onProgress?: (progress: UploadProgress) => void
   signal?: AbortSignal
 }
@@ -33,10 +41,11 @@ export type UploadFileOptions = {
 export async function uploadFile({
   kind,
   file,
+  name,
   onProgress,
   signal,
 }: UploadFileOptions): Promise<UploadResult> {
-  const result = await upload(file.name, file, {
+  const result = await upload(name ?? file.name, file, {
     access: 'public',
     handleUploadUrl: '/api/upload',
     clientPayload: JSON.stringify({ kind }),

@@ -9,7 +9,8 @@ export const metadata: Metadata = {
   description: 'Enter your authentication code to sign in.',
 }
 
-export default function TwoFactorPage() {
+export default async function TwoFactorPage(props: PageProps<'/two-factor'>) {
+  const { next } = await props.searchParams
   const { imageSrc, imageMobileSrc, imageAlt } = SIGNUP_ROLES.attendee
 
   return (
@@ -18,7 +19,7 @@ export default function TwoFactorPage() {
       imageMobileSrc={imageMobileSrc}
       imageAlt={imageAlt}
     >
-      <TwoFactorForm />
+      <TwoFactorForm next={typeof next === 'string' ? next : null} />
     </AuthShell>
   )
 }

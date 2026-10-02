@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { HugeiconsIcon } from '@hugeicons/react'
 import {
   Alert02Icon,
+  ArrowTurnBackwardIcon,
   CheckmarkCircle02Icon,
   InformationCircleIcon,
   PlayIcon,
@@ -207,15 +208,19 @@ export function ReviewStateNotice({
   submitBlocked,
   submitting,
   reopening,
+  withdrawing,
   onSubmit,
   onReopen,
+  onWithdraw,
 }: {
   data: FormDetail
   submitBlocked: boolean
   submitting: boolean
   reopening: boolean
+  withdrawing: boolean
   onSubmit: () => void
   onReopen: () => void
+  onWithdraw: () => void
 }) {
   const { form, availability, canReopen, counts } = data
 
@@ -259,6 +264,23 @@ export function ReviewStateNotice({
         <Notice
           tone="info"
           title="Waiting for an admin to approve your questions"
+          action={
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={withdrawing}
+              onClick={onWithdraw}
+              className="gap-1.5"
+            >
+              <HugeiconsIcon
+                icon={ArrowTurnBackwardIcon}
+                className="size-4"
+                strokeWidth={2}
+              />
+              {withdrawing ? 'Withdrawing…' : 'Withdraw from review'}
+            </Button>
+          }
         >
           <p>
             It is <strong>not</strong> accepting applications in the meantime.
@@ -268,6 +290,11 @@ export function ReviewStateNotice({
             {counts.total > 0
               ? ` The ${plural(counts.total, 'application')} you already have ${counts.total === 1 ? 'is' : 'are'} untouched — you can still review ${counts.total === 1 ? 'it' : 'them'}.`
               : ''}
+          </p>
+          <p className="mt-2">
+            Not ready after all? Withdraw it and it goes back to a draft for you
+            to keep working on. If an admin gets to it first you will be told,
+            and nothing is lost either way.
           </p>
           {form.rejectionReason ? (
             <p className="mt-2">

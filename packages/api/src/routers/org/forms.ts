@@ -125,6 +125,20 @@ function approvedAsIs(form: {
   )
 }
 
+// Why a withdrawal was refused, in the organizer's terms. An approval that
+// landed first is the one worth naming: their form is live, not lost.
+function notAwaitingReview(status: FormStatus): TRPCError {
+  return new TRPCError({
+    code: 'BAD_REQUEST',
+    message:
+      status === 'published'
+        ? 'An admin approved this form while you were withdrawing it, so it is live now. Close it if you need it to stop taking applications.'
+        : status === 'rejected' || status === 'suspended'
+          ? 'An admin has already decided on this form. Read what they said, then submit it again.'
+          : 'This form is not waiting for review.',
+  })
+}
+
 // Reopening is for a form its organizer closed. A form an admin took down is
 // not one of those, and saying so plainly beats "only a closed form can be
 // reopened" when the organizer is staring at a form that was live this
@@ -417,6 +431,61 @@ export const orgFormsRouter = createTRPCRouter({
       }
 
       return { id: form.id, status: 'pending_review' as const }
+    }),
+
+  // Pulls a form back out of the admin queue, to a draft, so the organizer can
+  // keep working on it instead of waiting. Only while it is actually awaiting
+  // review, and only for whoever manages the event (requireOwnedForm — its
+  // organizer, or an admin acting for them, the rule every procedure here
+  // uses).
+  //
+  // Withdrawing and an admin approving are the same race, from two sides, and
+  // they are guarded the same way: admin.moderation.approveForm's decision
+  // lives in its UPDATE's WHERE (`FORM_PENDING` and the revision it was
+  // shown), and this one's lives in its own (`status = 'pending_review'`).
+  // Both are single conditional UPDATEs against one row, so the row lock
+  // serialises them and the second to arrive re-evaluates its WHERE against
+  // the row the first left behind: one matches, the other matches nothing and
+  // says so. A withdrawal that lands first makes the approval a CONFLICT the
+  // admin sees; an approval that lands first leaves the form live and the
+  // organizer is told it is too late to withdraw. They can never both win, and
+  // a withdrawal can never silently discard an approval.
+  //
+  // It goes back to 'draft' rather than wherever it came from: a form awaiting
+  // review is offline either way, and a draft is the one state that says "mine
+  // again, not live, not queued". A form that was published before the edit
+  // that sent it back keeps its approvedRevision, so nothing about the old
+  // approval is lost — but it is not 'closed', so reopen still can't put it
+  // back live without a review.
+  withdraw: organizerProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { form } = await requireOwnedForm(ctx, input.id)
+      if (form.status !== 'pending_review') throw notAwaitingReview(form.status)
+
+      const updated = await ctx.db
+        .update(forms)
+        .set({
+          status: 'draft',
+          // Nothing is waiting for an admin any more; submitting again stamps
+          // a fresh time and puts it back at the end of the queue.
+          reviewRequestedAt: null,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(forms.id, form.id), eq(forms.status, 'pending_review')))
+        .returning({ id: forms.id })
+      if (updated.length === 0) {
+        // An admin decided while this was in flight.
+        const [current] = await ctx.db
+          .select({ status: forms.status })
+          .from(forms)
+          .where(eq(forms.id, form.id))
+          .limit(1)
+        if (!current) throw new TRPCError({ code: 'NOT_FOUND' })
+        throw notAwaitingReview(current.status)
+      }
+
+      return { id: form.id, status: 'draft' as const }
     }),
 
   // Takes a closed form straight back to published, but only while its

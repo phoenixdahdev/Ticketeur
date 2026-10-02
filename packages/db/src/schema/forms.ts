@@ -20,10 +20,26 @@ import { events, orders } from './events'
 // several (a contestant form and a vendor form, say). The organizer builds the
 // fields, applicants submit, and the organizer approves or rejects each one.
 //
-// 'draft' is invisible to the public. 'published' accepts submissions inside
-// the opensAt/closesAt window while spots remain. 'closed' stops intake but
-// keeps every submission; publishing again reopens it.
-export type FormStatus = 'draft' | 'published' | 'closed'
+// Organizers write their own questions, so a form takes submissions only once
+// an admin has approved exactly what it asks, as events are moderated:
+//
+// 'draft'          — being built; invisible to the public.
+// 'pending_review' — submitted, waiting for an admin. Also where a published
+//                    form goes back to when its organizer edits what an admin
+//                    reviewed (see packages/api/src/lib/form-review.ts).
+// 'published'      — approved: accepts submissions inside the opensAt/closesAt
+//                    window while spots remain.
+// 'rejected'       — turned down by an admin (rejectionReason says why); the
+//                    organizer edits it and submits it again.
+// 'closed'         — stops intake but keeps every submission. Its page stays
+//                    public, so its title and description are frozen.
+//                    Reopening goes straight back to 'published' only while
+//                    the content is still the revision an admin approved.
+//
+// The public lookup and intake both allow-list statuses, so 'pending_review'
+// and 'rejected' are hidden and take no submissions.
+export type FormStatus =
+  'draft' | 'pending_review' | 'published' | 'rejected' | 'closed'
 
 // What the form is for. It labels the form (dashboard filters, copy); no
 // server rule branches on it.
@@ -75,16 +91,50 @@ export const forms = pgTable(
       .notNull()
       .default('manual'),
     status: text('status').$type<FormStatus>().notNull().default('draft'),
+    // ── Admin review ──
+    // Counts changes to what an admin reviews: the fields (anything but their
+    // order), the price options' names and prices, the title and the
+    // description. Bumped in the same transaction as the change, by
+    // recordContentChange in packages/api/src/lib/form-review.ts. Approval
+    // names the revision the admin was shown and only succeeds while it is
+    // still current, so an edit that lands mid-review can't be approved
+    // unseen.
+    contentRevision: integer('content_revision').notNull().default(0),
+    // The contentRevision an admin last approved; NULL = never approved. A
+    // closed form still at this revision can reopen without another review.
+    approvedRevision: integer('approved_revision'),
+    // When the form last entered 'pending_review': submitted by its organizer,
+    // or sent back by an edit to a live form. Orders the admin queue.
+    reviewRequestedAt: timestamp('review_requested_at'),
+    // The admin behind the latest decision, and when. NULL until reviewed.
+    reviewerId: text('reviewer_id').references(() => user.id, {
+      onDelete: 'set null',
+      onUpdate: 'cascade',
+    }),
+    reviewedAt: timestamp('reviewed_at'),
+    // Why the latest rejection was made, written for the organizer. Kept
+    // through resubmission, so the next reviewer sees what was asked for;
+    // cleared on approval.
+    rejectionReason: text('rejection_reason'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
-  (t) => [index('forms_event_idx').on(t.eventId)]
+  (t) => [
+    index('forms_event_idx').on(t.eventId),
+    // The admin review queue filters on status.
+    index('forms_status_idx').on(t.status),
+  ]
 )
 
 export const formsRelations = relations(forms, ({ one, many }) => ({
   event: one(events, {
     fields: [forms.eventId],
     references: [events.id],
+  }),
+  reviewer: one(user, {
+    fields: [forms.reviewerId],
+    references: [user.id],
+    relationName: 'forms_reviewer',
   }),
   fields: many(formFields),
   priceOptions: many(formPriceOptions),

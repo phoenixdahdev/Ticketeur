@@ -6,6 +6,8 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useQuery } from '@tanstack/react-query'
 import { parseAsString, parseAsStringLiteral, useQueryStates } from 'nuqs'
 
+import { DEFAULT_SERVICE_FEE_BPS } from '@ticketur/api/lib/fees'
+
 import { useTRPC } from '@/lib/trpc'
 import { formatNaira } from '@/lib/event-display'
 import type { EventDetailData } from '@/components/sections/event-detail/types'
@@ -71,6 +73,15 @@ export function TicketsTab({ event }: { event: EventDetailData }) {
   const { data, isLoading } = useQuery(
     trpc.public.events.bySlug.queryOptions({ slug: event.slug })
   )
+
+  // The platform's ticket service-fee rate, in basis points, from the same
+  // query that priced the tiers. This component renders a skeleton until that
+  // query lands (see below), so by the time a checkout view is mounted the
+  // rate is a real number from the server, not a guess — there is no moment at
+  // which a subtotal is on screen without the fee that goes with it. The
+  // fallback is the platform default and is unreachable in practice: `data` is
+  // defined on every path that reaches a checkout view.
+  const serviceFeeBps = data?.serviceFeeBps ?? DEFAULT_SERVICE_FEE_BPS
 
   const tiers: TicketTier[] = (data?.tiers ?? []).map((t) => {
     const remaining = Math.max(0, t.quantity - t.sold)
@@ -207,6 +218,7 @@ export function TicketsTab({ event }: { event: EventDetailData }) {
             <GroupCheckoutView
               event={event}
               tiers={tiers}
+              serviceFeeBps={serviceFeeBps}
               onBack={() => setChooserOpen(true)}
             />
           ) : (
@@ -239,6 +251,7 @@ export function TicketsTab({ event }: { event: EventDetailData }) {
                     event={event}
                     tiers={tiers}
                     quantities={quantities}
+                    serviceFeeBps={serviceFeeBps}
                     onBack={() => goTo('select')}
                   />
                 </motion.div>

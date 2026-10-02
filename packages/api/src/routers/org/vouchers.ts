@@ -13,7 +13,8 @@ const discountTypeEnum = z.enum(['percent', 'fixed'])
 
 // `discountValue` is expressed in the organizer's terms: whole percent (1–100)
 // for percent vouchers, minor units for fixed. It's stored as basis points for
-// percent (matching SERVICE_FEE_BPS) so the discount math stays integer-only.
+// percent (the same unit as the platform service-fee rates, lib/fees.ts) so
+// the discount math stays integer-only.
 const baseFields = {
   code: z
     .string()

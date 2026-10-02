@@ -31,11 +31,18 @@ export function CheckoutView({
   event,
   tiers,
   quantities,
+  serviceFeeBps,
   onBack,
 }: {
   event: EventDetailData
   tiers: TicketTier[]
   quantities: Record<string, number>
+  // The platform's ticket service-fee rate in basis points, from the same
+  // public.events.bySlug query that priced the tiers above. For DISPLAY only —
+  // checkout.start reads the rate from the database again and that figure is
+  // what gets charged, so a tab left open across a rate change can show a
+  // stale fee but cannot pay one.
+  serviceFeeBps: number
   onBack: () => void
 }) {
   const trpc = useTRPC()
@@ -61,7 +68,7 @@ export function CheckoutView({
   const voucher = useVoucher(event.id, subtotalMinor)
   const discountMinor = voucher.discountMinor
   const discountedMinor = Math.max(0, subtotalMinor - discountMinor)
-  const feeMinor = calculateFeeMinor(discountedMinor)
+  const feeMinor = calculateFeeMinor(discountedMinor, serviceFeeBps)
   const totalMinor = discountedMinor + feeMinor
   const serviceFee = feeMinor / 100
   const discount = discountMinor / 100

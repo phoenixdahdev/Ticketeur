@@ -44,10 +44,14 @@ function newAttendee(tierId: string): Attendee {
 export function GroupCheckoutView({
   event,
   tiers,
+  serviceFeeBps,
   onBack,
 }: {
   event: EventDetailData
   tiers: TicketTier[]
+  // The platform's ticket service-fee rate in basis points — see CheckoutView.
+  // Display only; checkout.start recomputes the fee it charges.
+  serviceFeeBps: number
   onBack: () => void
 }) {
   const trpc = useTRPC()
@@ -78,7 +82,7 @@ export function GroupCheckoutView({
   const voucher = useVoucher(event.id, subtotalMinor)
   const discountMinor = voucher.discountMinor
   const discountedMinor = Math.max(0, subtotalMinor - discountMinor)
-  const feeMinor = calculateFeeMinor(discountedMinor)
+  const feeMinor = calculateFeeMinor(discountedMinor, serviceFeeBps)
   const totalMinor = discountedMinor + feeMinor
   const serviceFee = feeMinor / 100
   const discount = discountMinor / 100

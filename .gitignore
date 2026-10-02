@@ -48,3 +48,6 @@ npm-debug.log*
 docs
 next-env.d.ts
 .env*
+
+# Agent worktrees: each is a full nested checkout of this repo.
+.claude/worktrees/

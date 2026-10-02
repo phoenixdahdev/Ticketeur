@@ -25,6 +25,7 @@ export type {
   EventVendorStatus,
   ExternalVendorInviteStatus,
   OrderStatus,
+  OrderType,
   ActivityType,
   ReportSubjectType,
   ReportStatus,
@@ -36,3 +37,22 @@ export {
 } from './analytics'
 export { vouchers, vouchersRelations } from './vouchers'
 export type { VoucherDiscountType } from './vouchers'
+export {
+  forms,
+  formFields,
+  formPriceOptions,
+  submissions,
+  formsRelations,
+  formFieldsRelations,
+  formPriceOptionsRelations,
+  submissionsRelations,
+} from './forms'
+export type {
+  FormStatus,
+  FormType,
+  FormReviewMode,
+  FormFieldType,
+  SubmissionStatus,
+  SubmissionAnswerValue,
+  SubmissionAnswers,
+} from './forms'

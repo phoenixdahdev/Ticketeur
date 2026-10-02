@@ -165,3 +165,75 @@ export const adminBroadcastSchema = z.object({
   body: z.string(),
 })
 export type AdminBroadcastPayload = z.infer<typeof adminBroadcastSchema>
+
+// Registration form review. An admin approved a form's questions (it now takes
+// submissions), or rejected them with a reason the organizer must address.
+export const formApprovedSchema = z.object({
+  email: z.email(),
+  organizerName: z.string(),
+  formTitle: z.string(),
+  eventTitle: z.string(),
+  publicUrl: z.url(),
+  manageUrl: z.url(),
+})
+export type FormApprovedPayload = z.infer<typeof formApprovedSchema>
+
+export const formRejectedSchema = z.object({
+  email: z.email(),
+  organizerName: z.string(),
+  formTitle: z.string(),
+  eventTitle: z.string(),
+  // Required: an admin can't reject a form without saying why.
+  reason: z.string().min(1),
+  manageUrl: z.url(),
+})
+export type FormRejectedPayload = z.infer<typeof formRejectedSchema>
+// ─── Registration form submissions ─────────────────────────────────────────
+// Sent to the applicant. The API triggers these from packages/api/src/lib/
+// form-emails.ts: the confirmation once a submission is complete (on submit
+// when free, once its fee is paid otherwise), approval and rejection from the
+// organizer's review.
+
+export const submissionConfirmationSchema = z.object({
+  email: z.email(),
+  applicantName: z.string(),
+  formTitle: z.string(),
+  eventTitle: z.string(),
+  // Pre-formatted display strings, as for the other event emails.
+  eventDate: z.string().default(''),
+  eventLocation: z.string().default(''),
+  // The code the applicant quotes (e.g. "K7QM-3XPD").
+  reference: z.string(),
+  // 'approved' on an auto-approve form; 'submitted' awaits the organizer.
+  status: z.enum(['submitted', 'approved']),
+  // Pre-formatted fee paid ("₦5,000"); null for a free submission.
+  amountPaid: z.string().nullable().default(null),
+  eventUrl: z.url(),
+})
+
+export const submissionApprovedSchema = z.object({
+  email: z.email(),
+  applicantName: z.string(),
+  formTitle: z.string(),
+  eventTitle: z.string(),
+  eventDate: z.string().default(''),
+  eventLocation: z.string().default(''),
+  reference: z.string(),
+  eventUrl: z.url(),
+})
+
+export const submissionRejectedSchema = z.object({
+  email: z.email(),
+  applicantName: z.string(),
+  formTitle: z.string(),
+  eventTitle: z.string(),
+  reference: z.string(),
+  // The organizer's reason, written for the applicant.
+  reason: z.string().default(''),
+})
+
+export type SubmissionConfirmationPayload = z.infer<
+  typeof submissionConfirmationSchema
+>
+export type SubmissionApprovedPayload = z.infer<typeof submissionApprovedSchema>
+export type SubmissionRejectedPayload = z.infer<typeof submissionRejectedSchema>

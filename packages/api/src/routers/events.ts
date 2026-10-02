@@ -614,7 +614,15 @@ export const eventsRouter = createTRPCRouter({
       const ordersTotal = await ctx.db
         .select({ count: sql<number>`COUNT(*)::int` })
         .from(orders)
-        .where(and(eq(orders.eventId, ev.id), eq(orders.status, 'paid')))
+        .where(
+          and(
+            eq(orders.eventId, ev.id),
+            eq(orders.status, 'paid'),
+            // Ticket orders only, to match the ticket sales above: a
+            // registration fee is an order too, but not a ticket sale.
+            eq(orders.type, 'ticket')
+          )
+        )
 
       return {
         event: ev,

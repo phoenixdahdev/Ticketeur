@@ -115,11 +115,19 @@ export function SmallEventCard({
         <span className="font-heading text-primary text-lg font-bold">
           {price}
         </span>
+        {/* A finished event cannot be bought — the server rejects it too — but
+            its page is the public record of what was hosted, so the link stays
+            and only the call to action changes. */}
         <Link
           href={href}
-          className="text-primary hover:text-primary-hover text-sm font-medium transition-colors"
+          className={cn(
+            'text-sm font-medium transition-colors',
+            status === 'past'
+              ? 'text-muted-foreground hover:text-foreground'
+              : 'text-primary hover:text-primary-hover'
+          )}
         >
-          Buy Ticket
+          {status === 'past' ? 'Closed' : 'Buy Ticket'}
         </Link>
       </div>
     </motion.article>

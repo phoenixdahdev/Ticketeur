@@ -1,4 +1,4 @@
-import { desc, eq, or, sql } from 'drizzle-orm'
+import { and, desc, eq, or, sql } from 'drizzle-orm'
 
 import { events, orders, tickets } from '@ticketur/db'
 
@@ -48,7 +48,14 @@ export const accountTicketsRouter = createTRPCRouter({
       })
       .from(orders)
       .innerJoin(events, eq(events.id, orders.eventId))
-      .where(or(eq(orders.buyerId, userId), eq(orders.buyerEmail, userEmail)))
+      .where(
+        and(
+          // Ticket orders only: a registration fee is paid by the same
+          // account but buys no tickets.
+          eq(orders.type, 'ticket'),
+          or(eq(orders.buyerId, userId), eq(orders.buyerEmail, userEmail))
+        )
+      )
       .orderBy(desc(orders.createdAt))
 
     return rows

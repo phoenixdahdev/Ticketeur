@@ -8,7 +8,11 @@ import {
   verifyTransaction,
 } from '@ticketur/api/lib/flutterwave'
 
-import { fulfillOrder, notifyOrderFulfilled } from '@ticketur/api/lib/orders'
+import {
+  fulfillOrder,
+  notifyFulfilment,
+  OrderNotFulfillableError,
+} from '@ticketur/api/lib/orders'
 
 export const dynamic = 'force-dynamic'
 
@@ -104,10 +108,11 @@ export async function POST(req: Request) {
   }
 
   try {
-    const result = await fulfillOrder({
-      orderId: order.id,
-      flwTransactionId: String(tx.id),
-    })
+    // fulfillOrder re-checks the verified charge (status, tx_ref, amount,
+    // currency) against the locked order before it delivers anything, for
+    // every order type, and then delivers by type: tickets for a ticket order,
+    // the submission for a registration fee.
+    const result = await fulfillOrder({ orderId: order.id, charge: tx })
     if (!result) {
       console.error('[webhook] verified charge maps to a missing order row', {
         orderId: order.id,
@@ -120,18 +125,39 @@ export async function POST(req: Request) {
       )
     }
 
-    // Email + PDF only when this call did the pending→paid transition.
-    // The /checkout/return page may have already fulfilled the order if the
-    // customer beat the webhook back to our domain.
-    if (result.justFulfilled) {
-      await notifyOrderFulfilled({ orderId: order.id, baseUrl: getBaseUrl() })
+    if (result.outcome === 'rejected') {
+      // Underpaid or wrong-currency charge. fulfillOrder has logged expected
+      // vs received and recorded the charge on the order (now 'failed'). It is
+      // refused with a 4xx like the other rejections above, so it shows up in
+      // request telemetry instead of passing as a 200. A Flutterwave retry
+      // re-runs the same check and cannot change the outcome.
+      return NextResponse.json(
+        { ok: false, reason: 'charge does not pay for the order' },
+        { status: 422 }
+      )
     }
+
+    // Emails (and a ticket order's PDF) only when this call did the
+    // pending→paid transition. The /checkout/return page may have already
+    // fulfilled the order if the customer beat the webhook back to our domain.
+    await notifyFulfilment(result, getBaseUrl())
 
     return NextResponse.json({
       ok: true,
       alreadyFulfilled: !result.justFulfilled,
     })
   } catch (err) {
+    if (err instanceof OrderNotFulfillableError) {
+      // The charge pays for the order, but there is nothing this code can
+      // deliver for it (a type with no fulfilment yet, or a registration fee
+      // whose submission is gone). fulfillOrder logged it and wrote nothing,
+      // so the order is left for a person. Refused with a 4xx like a rejected
+      // charge: a retry meets the same refusal.
+      return NextResponse.json(
+        { ok: false, reason: 'order cannot be fulfilled' },
+        { status: 422 }
+      )
+    }
     // Previously logged without any way to tell which order failed, so a
     // failed fulfillment could not be traced back to the payment.
     console.error('[webhook] flutterwave fulfillment failed', {

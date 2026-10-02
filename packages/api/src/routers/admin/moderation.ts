@@ -33,6 +33,7 @@ import {
   EVENT_PENDING,
   EVENT_EDIT_PENDING,
   FORM_PENDING,
+  FORM_PUBLIC,
   REPORT_OPEN,
 } from '../../lib/predicates'
 
@@ -862,6 +863,51 @@ export const adminModerationRouter = createTRPCRouter({
       fieldCount: r.fieldCount,
       history: reviewHistory(r),
       submittedAt: (r.requestedAt ?? r.updatedAt).toISOString(),
+    }))
+  }),
+
+  // Every form the public can reach right now. The queue above only shows
+  // forms waiting for a decision, so without this an admin has nowhere to find
+  // an approved form that has since turned out to be a problem — and so
+  // nowhere to reach takeDownForm from. Busiest first: a form with
+  // submissions is the one a takedown matters most for.
+  liveForms: adminProcedure.query(async ({ ctx }) => {
+    const submissionCount = sql<number>`(SELECT COUNT(*)::int FROM ${submissions} WHERE ${submissions.formId} = ${forms.id})`
+
+    const rows = await ctx.db
+      .select({
+        id: forms.id,
+        title: forms.title,
+        type: forms.type,
+        status: forms.status,
+        approvedAt: forms.reviewedAt,
+        updatedAt: forms.updatedAt,
+        eventTitle: events.title,
+        bannerUrl: events.bannerUrl,
+        organizerName: user.name,
+        organizerOrgName: user.orgName,
+        fieldCount: sql<number>`(SELECT COUNT(*)::int FROM ${formFields} WHERE ${formFields.formId} = ${forms.id})`,
+        submissionCount,
+      })
+      .from(forms)
+      .innerJoin(events, eq(events.id, forms.eventId))
+      .innerJoin(user, eq(user.id, events.organizerId))
+      .where(FORM_PUBLIC)
+      .orderBy(desc(submissionCount), desc(forms.updatedAt))
+
+    return rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      type: r.type,
+      // 'published' takes submissions; 'closed' has stopped but its page is
+      // still public, which is its own reason to be able to pull it.
+      status: r.status as 'published' | 'closed',
+      eventTitle: r.eventTitle,
+      thumbnailUrl: r.bannerUrl ?? '',
+      organizerName: r.organizerOrgName ?? r.organizerName,
+      fieldCount: r.fieldCount,
+      submissionCount: r.submissionCount,
+      approvedAt: (r.approvedAt ?? r.updatedAt).toISOString(),
     }))
   }),
 

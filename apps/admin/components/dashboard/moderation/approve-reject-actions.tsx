@@ -52,6 +52,10 @@ export function ApproveRejectActions(props: Props) {
       queryClient.invalidateQueries({
         queryKey: trpc.admin.moderation.pendingForms.queryKey(),
       })
+      // An approved form joins the live list; a rejected one leaves it.
+      queryClient.invalidateQueries({
+        queryKey: trpc.admin.moderation.liveForms.queryKey(),
+      })
       queryClient.invalidateQueries({
         queryKey: trpc.admin.moderation.queue.queryKey(),
       })

@@ -43,6 +43,10 @@ export function TakeDownFormAction({
         queryClient.invalidateQueries({
           queryKey: trpc.admin.moderation.pendingForms.queryKey(),
         })
+        // It has just left the live list.
+        queryClient.invalidateQueries({
+          queryKey: trpc.admin.moderation.liveForms.queryKey(),
+        })
         queryClient.invalidateQueries({
           queryKey: trpc.admin.moderation.queue.queryKey(),
         })

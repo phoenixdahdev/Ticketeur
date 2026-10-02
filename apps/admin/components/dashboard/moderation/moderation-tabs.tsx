@@ -11,9 +11,17 @@ import { ModerationVendorsTable } from '@/components/dashboard/moderation/modera
 import { ModerationEventsTable } from '@/components/dashboard/moderation/moderation-events-table'
 import { ModerationEventEditsTable } from '@/components/dashboard/moderation/moderation-event-edits-table'
 import { ModerationFormsTable } from '@/components/dashboard/moderation/moderation-forms-table'
+import { ModerationLiveFormsTable } from '@/components/dashboard/moderation/moderation-live-forms-table'
 import { FlaggedActivitiesList } from '@/components/dashboard/moderation/flagged-activities-list'
 
-const TABS = ['vendors', 'events', 'edits', 'forms', 'flagged'] as const
+const TABS = [
+  'vendors',
+  'events',
+  'edits',
+  'forms',
+  'live-forms',
+  'flagged',
+] as const
 type Tab = (typeof TABS)[number]
 
 const TAB_LABELS: Record<Tab, string> = {
@@ -21,6 +29,7 @@ const TAB_LABELS: Record<Tab, string> = {
   events: 'Events',
   edits: 'Event Edits',
   forms: 'Forms',
+  'live-forms': 'Live Forms',
   flagged: 'Flagged Activities',
 }
 
@@ -50,6 +59,13 @@ export function ModerationTabs() {
   const formsQuery = useQuery(
     trpc.admin.moderation.pendingForms.queryOptions(undefined, {
       enabled: tab === 'forms',
+    })
+  )
+  // Forms already public, so an approved form that turns out to be a problem
+  // can be found and taken down. Not a queue: nothing here is waiting on us.
+  const liveFormsQuery = useQuery(
+    trpc.admin.moderation.liveForms.queryOptions(undefined, {
+      enabled: tab === 'live-forms',
     })
   )
   const flaggedQuery = useQuery(
@@ -114,6 +130,11 @@ export function ModerationTabs() {
           <ModerationFormsTable
             rows={formsQuery.data ?? []}
             loading={formsQuery.isLoading}
+          />
+        ) : tab === 'live-forms' ? (
+          <ModerationLiveFormsTable
+            rows={liveFormsQuery.data ?? []}
+            loading={liveFormsQuery.isLoading}
           />
         ) : (
           <FlaggedActivitiesList

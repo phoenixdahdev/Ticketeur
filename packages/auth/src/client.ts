@@ -4,6 +4,7 @@ import {
   twoFactorClient,
   emailOTPClient,
   inferAdditionalFields,
+  oauthPopupClient,
 } from 'better-auth/client/plugins'
 
 import {
@@ -43,6 +44,7 @@ export function createClient(baseURL: string) {
           admin: adminRole,
         },
       }),
+      oauthPopupClient(),
     ],
   })
 }

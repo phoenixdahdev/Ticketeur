@@ -5,13 +5,18 @@ import Image from 'next/image'
 import { motion } from 'motion/react'
 import { Button } from '@ticketur/ui/components/button'
 
+// Two modes: pass `href` to navigate (signup role selection), or `onSelect` to
+// run an action (post-social-signup role choice, which calls the API instead).
 export type RoleCardProps = {
   title: string
   description: string
   imageSrc: string
   imageAlt: string
-  href: string
   index?: number
+  href?: string
+  onSelect?: () => void
+  pending?: boolean
+  disabled?: boolean
 }
 
 export function RoleCard({
@@ -20,6 +25,9 @@ export function RoleCard({
   imageSrc,
   imageAlt,
   href,
+  onSelect,
+  pending = false,
+  disabled = false,
   index = 0,
 }: RoleCardProps) {
   return (
@@ -59,9 +67,20 @@ export function RoleCard({
           </p>
         </div>
 
-        <Button size="xl" className="w-full" asChild>
-          <Link href={href}>Continue</Link>
-        </Button>
+        {href ? (
+          <Button size="xl" className="w-full" asChild>
+            <Link href={href}>Continue</Link>
+          </Button>
+        ) : (
+          <Button
+            size="xl"
+            className="w-full"
+            onClick={onSelect}
+            disabled={disabled || pending}
+          >
+            {pending ? 'Setting up…' : 'Continue'}
+          </Button>
+        )}
       </div>
     </motion.article>
   )

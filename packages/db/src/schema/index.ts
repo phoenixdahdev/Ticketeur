@@ -56,3 +56,11 @@ export type {
   SubmissionAnswerValue,
   SubmissionAnswers,
 } from './forms'
+export {
+  paymentDiscrepancies,
+  paymentDiscrepanciesRelations,
+} from './payments'
+export type {
+  PaymentDiscrepancyKind,
+  PaymentDiscrepancyStatus,
+} from './payments'

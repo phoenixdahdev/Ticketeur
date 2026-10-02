@@ -1,6 +1,13 @@
 import { count, desc, eq, sql } from 'drizzle-orm'
 
-import { events, forms, orders, reports, user } from '@ticketur/db'
+import {
+  events,
+  forms,
+  orders,
+  paymentDiscrepancies,
+  reports,
+  user,
+} from '@ticketur/db'
 
 import { adminProcedure, createTRPCRouter } from '../../trpc'
 import {
@@ -10,6 +17,7 @@ import {
   EVENT_PENDING,
   FORM_PENDING,
   REPORT_OPEN,
+  DISCREPANCY_OPEN,
 } from '../../lib/predicates'
 
 
@@ -50,6 +58,18 @@ export const adminOverviewRouter = createTRPCRouter({
       .from(forms)
       .where(FORM_PENDING)
 
+    // Money the platform is holding that it may owe back. Deliberately NOT
+    // folded into `pendingApprovals`: an approval is a judgement call, this is
+    // a refund somebody is waiting for, and it gets its own figure so it is
+    // noticed rather than averaged away.
+    const [discrepancyRow] = await ctx.db
+      .select({
+        value: count(paymentDiscrepancies.id),
+        owedMinor: sql<number>`coalesce(sum(case when ${paymentDiscrepancies.paidCurrency} = 'NGN' then coalesce(${paymentDiscrepancies.owedMinor}, 0) else 0 end), 0)`,
+      })
+      .from(paymentDiscrepancies)
+      .where(DISCREPANCY_OPEN)
+
     const pending =
       Number(pendingVendorRow?.value ?? 0) +
       Number(pendingEventRow?.value ?? 0) +
@@ -61,6 +81,8 @@ export const adminOverviewRouter = createTRPCRouter({
       totalEvents: Number(eventRow?.value ?? 0),
       totalRevenueMinor: Number(revenueRow?.value ?? 0),
       pendingApprovals: pending,
+      openDiscrepancies: Number(discrepancyRow?.value ?? 0),
+      openDiscrepancyOwedMinor: Number(discrepancyRow?.owedMinor ?? 0),
     }
   }),
 

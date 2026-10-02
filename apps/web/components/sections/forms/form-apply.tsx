@@ -32,10 +32,7 @@ import {
   FormSigninDialog,
   type SigninReason,
 } from '@/components/sections/forms/form-signin-dialog'
-import {
-  FormSubmitted,
-  type SubmittedResult,
-} from '@/components/sections/forms/form-submitted'
+import type { SubmittedResult } from '@/components/sections/forms/form-submitted'
 import {
   toAnswerField,
   type AnswerDraft,
@@ -46,16 +43,29 @@ import {
 // picked up again afterwards instead of making them tap the same button twice.
 type Intent = 'submit' | 'upload' | null
 
+export type SubmittedApplication = {
+  result: SubmittedResult
+  formTitle: string
+  event: OpenForm['event']
+  email: string | null
+}
+
 export function FormApply({
   data,
   slug,
   onRefetch,
+  onSubmitted,
 }: {
   data: OpenForm
   slug: string
   // Capacity, sold-out options and the form's own availability all move while
   // someone is filling this in. A refusal is the signal to go and look again.
   onRefetch: () => void
+  // The confirmation is handed to the page rather than held here. Taking the
+  // last spot makes the form 'full', and a refetch that lands afterwards would
+  // otherwise unmount this component and take the applicant's reference with
+  // it — the one thing on the page they need to keep.
+  onSubmitted: (application: SubmittedApplication) => void
 }) {
   const trpc = useTRPC()
   const router = useRouter()
@@ -82,7 +92,6 @@ export function FormApply({
   const [optionError, setOptionError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [uploadBusy, setUploadBusy] = useState<Record<string, boolean>>({})
-  const [result, setResult] = useState<SubmittedResult | null>(null)
   const [leaving, setLeaving] = useState(false)
 
   const [signinOpen, setSigninOpen] = useState(false)
@@ -221,9 +230,14 @@ export function FormApply({
         }
 
         clearDraft(slug)
-        setResult({
-          reference: response.reference,
-          status: response.status,
+        onSubmitted({
+          result: {
+            reference: response.reference,
+            status: response.status,
+          },
+          formTitle: form.title,
+          event,
+          email: applicantEmail,
         })
         window.scrollTo({ top: 0, behavior: 'smooth' })
       },
@@ -310,7 +324,10 @@ export function FormApply({
     // The blocked uploads start themselves off `signedIn`; only a submit has
     // to be resumed by hand.
     if (intent === 'submit') {
-      window.setTimeout(() => send(), 0)
+      // Through the ref: by the time this runs React has re-rendered, so
+      // this is the send() that knows about any upload that just
+      // started off the new session.
+      window.setTimeout(() => sendRef.current(), 0)
     }
   }
 
@@ -332,17 +349,6 @@ export function FormApply({
       delete next[fieldId]
       return next
     })
-  }
-
-  if (result) {
-    return (
-      <FormSubmitted
-        result={result}
-        formTitle={form.title}
-        event={event}
-        email={applicantEmail}
-      />
-    )
   }
 
   const errorCount = Object.keys(errors).length + (optionError ? 1 : 0)

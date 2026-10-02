@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { WifiDisconnected01Icon } from '@hugeicons/core-free-icons'
@@ -8,7 +9,11 @@ import { Button } from '@ticketur/ui/components/button'
 import { Skeleton } from '@ticketur/ui/components/skeleton'
 
 import { useTRPC } from '@/lib/trpc'
-import { FormApply } from '@/components/sections/forms/form-apply'
+import {
+  FormApply,
+  type SubmittedApplication,
+} from '@/components/sections/forms/form-apply'
+import { FormSubmitted } from '@/components/sections/forms/form-submitted'
 import { FormEventHeader } from '@/components/sections/forms/form-event-header'
 import {
   FormUnavailable,
@@ -25,6 +30,22 @@ export function FormPageContent({ slug }: { slug: string }) {
   const { data, isLoading, isError, isFetching, refetch } = useQuery(
     trpc.public.forms.bySlug.queryOptions({ slug })
   )
+  const [submitted, setSubmitted] = useState<SubmittedApplication | null>(null)
+
+  // Checked before anything else. An application that went through has a
+  // reference the applicant has to keep, and no later read of the form — one
+  // that now says 'full' because they took the last spot, a refetch on window
+  // focus, a dropped connection — gets to replace it.
+  if (submitted) {
+    return (
+      <FormSubmitted
+        result={submitted.result}
+        formTitle={submitted.formTitle}
+        event={submitted.event}
+        email={submitted.email}
+      />
+    )
+  }
 
   if (isLoading) return <FormPageSkeleton />
 
@@ -48,7 +69,12 @@ export function FormPageContent({ slug }: { slug: string }) {
   return (
     <div className="flex flex-col gap-8">
       <FormEventHeader form={data.form} event={data.event} />
-      <FormApply data={data} slug={slug} onRefetch={() => void refetch()} />
+      <FormApply
+        data={data}
+        slug={slug}
+        onRefetch={() => void refetch()}
+        onSubmitted={setSubmitted}
+      />
     </div>
   )
 }

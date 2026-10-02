@@ -86,11 +86,31 @@ export async function createPayment(
   return { link: json.data.link }
 }
 
+// The parts of Flutterwave's transaction record we read. The verify endpoints
+// return more (flw_ref, app_fee, amount_settled, payment_type, ...), passed
+// through untyped.
 export type FlutterwaveTransaction = {
   id: number
   tx_ref: string
   status: string
+  // The transaction's amount in `currency`: what the charge was for. For
+  // Flutterwave Standard that is the `amount` we sent to POST /payments; for a
+  // charge someone initiates against our public key with our tx_ref, it is
+  // whatever they chose — which is why fulfilment must check it. This is the
+  // field to verify against the order: it is the one Flutterwave's
+  // verification guide compares (`data.amount === expectedAmount` and
+  // `data.currency === expectedCurrency`), and it does not move with who
+  // bears Flutterwave's processing fee.
   amount: number
+  // What the customer was debited: `amount` plus any Flutterwave fee passed on
+  // to them, so it exceeds `amount` when the account makes customers bear
+  // fees. Deliberately not used for verification. An equality check on it
+  // would reject correctly paid orders on such an account, and a >= check
+  // would accept a charge whose `amount` fell short by up to the fee. The
+  // merchant's net (`amount_settled`, i.e. `amount` less `app_fee` when the
+  // merchant bears the fee) can't be compared to the order total either.
+  // Optional: only logged, for investigating a rejected charge.
+  charged_amount?: number
   currency: string
   customer: {
     email: string
@@ -109,7 +129,10 @@ export async function verifyTransaction(
   transactionId: string | number
 ): Promise<FlutterwaveTransaction | null> {
   const secret = requireSecret()
-  const res = await fetch(`${BASE_URL}/transactions/${transactionId}/verify`, {
+  // Encoded: the return page passes this straight from its query string, and
+  // an unencoded "../" would point our secret-keyed request at another path.
+  const id = encodeURIComponent(String(transactionId))
+  const res = await fetch(`${BASE_URL}/transactions/${id}/verify`, {
     headers: { Authorization: `Bearer ${secret}` },
   })
   const json = (await res.json()) as FlutterwaveVerifyResponse

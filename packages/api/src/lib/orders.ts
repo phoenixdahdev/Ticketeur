@@ -14,6 +14,12 @@ import {
 } from '@ticketur/db'
 
 import { formatEventDateRange } from './dates'
+import type { FlutterwaveTransaction } from './flutterwave'
+import {
+  checkPaidAmount,
+  PAYMENT_CURRENCY,
+  toFlutterwaveAmount,
+} from './payment-amount'
 import { generateAndStoreTicketsPdf, ticketUrl } from './tickets-pdf'
 
 // Re-exported so callers get the whole order/fulfillment surface from one
@@ -156,8 +162,92 @@ export async function loadTicketsForOrder(orderId: string) {
     .orderBy(tickets.createdAt)
 }
 
+// The gateway's own record of a charge, as Flutterwave's verify endpoints
+// return it. fulfillOrder takes this rather than a bare transaction id, so no
+// caller can mark an order paid without handing over what was actually paid.
+export type VerifiedCharge = Pick<
+  FlutterwaveTransaction,
+  'id' | 'tx_ref' | 'status' | 'amount' | 'currency' | 'charged_amount'
+>
+
+export type ChargeRejection = {
+  reason:
+    | 'not_successful'
+    | 'tx_ref_mismatch'
+    | 'currency_mismatch'
+    | 'underpaid'
+    | 'invalid_amount'
+  // What we asked Flutterwave to charge for this order.
+  expected: { amount: number; currency: string; txRef: string | null }
+  // What the verified charge says was paid.
+  received: {
+    amount: number
+    currency: string
+    txRef: string
+    status: string
+    chargedAmount: number | null
+  }
+}
+
+type OrderRow = typeof orders.$inferSelect
+
+export type FulfillOrderResult =
+  | { outcome: 'fulfilled'; order: OrderRow; justFulfilled: true }
+  | { outcome: 'already_paid'; order: OrderRow; justFulfilled: false }
+  | {
+      outcome: 'rejected'
+      order: OrderRow
+      justFulfilled: false
+      rejection: ChargeRejection
+    }
+
+// Checks a verified charge against the order it claims to pay for.
+function assessCharge(
+  order: OrderRow,
+  charge: VerifiedCharge
+):
+  | { ok: true; overpaidMinor: number }
+  | { ok: false; rejection: ChargeRejection } {
+  const expected = {
+    amount: toFlutterwaveAmount(order.totalMinor),
+    currency: PAYMENT_CURRENCY,
+    txRef: order.flwTxRef,
+  }
+  const received = {
+    amount: charge.amount,
+    currency: charge.currency,
+    txRef: charge.tx_ref,
+    status: charge.status,
+    chargedAmount: charge.charged_amount ?? null,
+  }
+  const reject = (reason: ChargeRejection['reason']) => ({
+    ok: false as const,
+    rejection: { reason, expected, received },
+  })
+
+  if (charge.status !== 'successful') return reject('not_successful')
+  if (!order.flwTxRef || charge.tx_ref !== order.flwTxRef) {
+    return reject('tx_ref_mismatch')
+  }
+  const paid = checkPaidAmount({
+    totalMinor: order.totalMinor,
+    amount: charge.amount,
+    currency: charge.currency,
+  })
+  if (!paid.ok) return reject(paid.reason)
+  return { ok: true, overpaidMinor: paid.overpaidMinor }
+}
+
 // Idempotent: if the order is already paid it's a no-op.
 // Bumps tier.sold per line and mints tickets per line in the same call.
+//
+// Every path that marks an order paid comes through here — the FW webhook,
+// the /checkout/return page and the reconciliation job — and each must hand
+// over the gateway's verified charge. The charge is checked under the row
+// lock, against the locked row, before anything is minted: it must be
+// successful, carry this order's tx_ref, be in NGN and cover what checkout
+// asked Flutterwave to charge (see payment-amount.ts). A charge that fails
+// the check fulfils nothing.
 //
 // Returns `justFulfilled: true` only when this call did the pending→paid
 // transition. Side-effect callers (email, PDF) should gate on that flag so
@@ -165,15 +255,14 @@ export async function loadTicketsForOrder(orderId: string) {
 // race in to fulfill.
 export async function fulfillOrder({
   orderId,
-  flwTransactionId,
+  charge,
 }: {
   orderId: string
-  flwTransactionId?: string | null
-}): Promise<{
-  order: typeof orders.$inferSelect
-  justFulfilled: boolean
-} | null> {
-  return db.transaction(async (tx) => {
+  charge: VerifiedCharge
+}): Promise<FulfillOrderResult | null> {
+  const flwTransactionId = String(charge.id)
+
+  return db.transaction(async (tx): Promise<FulfillOrderResult | null> => {
     // Lock the order row for the rest of this transaction so two concurrent
     // fulfillers (the FW webhook and the /checkout/return page) can't both
     // read status='pending' and both mint tickets. At READ COMMITTED the loser
@@ -188,8 +277,85 @@ export async function fulfillOrder({
     if (!order) return null
 
     if (order.status === 'paid') {
-      // Already fulfilled — no-op (webhook + return page can both arrive)
-      return { order, justFulfilled: false }
+      // Already fulfilled — no-op (webhook + return page can both arrive).
+      // A *different* successful charge means the buyer paid twice for one
+      // order. Nothing refunds that automatically, so it has to be seen.
+      if (
+        charge.status === 'successful' &&
+        order.flwTransactionId !== null &&
+        order.flwTransactionId !== flwTransactionId
+      ) {
+        console.error('[orders] second successful charge for a paid order', {
+          orderId: order.id,
+          paidByTransactionId: order.flwTransactionId,
+          flwTransactionId,
+          txRef: charge.tx_ref,
+          amount: charge.amount,
+          currency: charge.currency,
+        })
+      }
+      return { outcome: 'already_paid', order, justFulfilled: false }
+    }
+
+    const assessment = assessCharge(order, charge)
+    if (!assessment.ok) {
+      // A successful charge carrying this order's own tx_ref that doesn't pay
+      // for it: money reached Flutterwave against this order, but not the
+      // right money. That is an underpayment, or a charge someone started
+      // with our public key and this tx_ref for an amount or currency of
+      // their choosing.
+      //
+      // Such an order is marked 'failed' rather than left 'pending', with the
+      // offending charge stored in flw_transaction_id:
+      //   - 'pending' means "awaiting payment", and it is what the
+      //     reconciliation job re-checks. A charge's amount never changes, so
+      //     re-checking it every 15 minutes would only repeat this log until
+      //     the order aged out: noise, not new information.
+      //   - 'failed' takes the order out of every automated path, which is
+      //     right, because it needs a person to refund the charge or settle
+      //     the difference. Find these orders with `status = 'failed' AND
+      //     flw_transaction_id IS NOT NULL` (no other path stores a
+      //     transaction id on an unpaid order), then look the charge up in
+      //     the Flutterwave dashboard.
+      //   - It doesn't strand a buyer who then pays properly. This function
+      //     only short-circuits on 'paid', so a later charge that passes the
+      //     check still fulfils the order from 'failed'.
+      //   - The buyer sees a "payment not confirmed" screen instead of a
+      //     processing screen that never resolves.
+      // A charge that isn't successful, or that carries another tx_ref, says
+      // nothing about this order's payment, so the order is left as it is.
+      const { rejection } = assessment
+      const chargeIsForThisOrder =
+        rejection.reason !== 'not_successful' &&
+        rejection.reason !== 'tx_ref_mismatch'
+      let current = order
+      if (
+        chargeIsForThisOrder &&
+        order.flwTransactionId === null &&
+        (order.status === 'pending' || order.status === 'failed')
+      ) {
+        await tx
+          .update(orders)
+          .set({ status: 'failed', flwTransactionId })
+          .where(eq(orders.id, order.id))
+        current = { ...order, status: 'failed', flwTransactionId }
+      }
+      // Logged here, not by each caller, so the webhook, the return page and
+      // the reconciliation job all record the same detail.
+      console.error('[orders] verified charge does not pay for the order', {
+        orderId: order.id,
+        orderStatus: current.status,
+        flwTransactionId,
+        reason: rejection.reason,
+        expected: rejection.expected,
+        received: rejection.received,
+      })
+      return {
+        outcome: 'rejected',
+        order: current,
+        justFulfilled: false,
+        rejection,
+      }
     }
 
     const items = await tx
@@ -256,20 +422,36 @@ export async function fulfillOrder({
     const paidAt = new Date()
     await tx
       .update(orders)
-      .set({
-        status: 'paid',
-        paidAt,
-        flwTransactionId: flwTransactionId ?? order.flwTransactionId ?? null,
-      })
+      .set({ status: 'paid', paidAt, flwTransactionId })
       .where(eq(orders.id, order.id))
 
+    // Paid from 'failed' after an earlier charge was rejected: that charge's
+    // id has just been overwritten above, and it still needs refunding.
+    if (
+      order.flwTransactionId !== null &&
+      order.flwTransactionId !== flwTransactionId
+    ) {
+      console.error('[orders] paid order had an earlier rejected charge', {
+        orderId: order.id,
+        flwTransactionId,
+        rejectedTransactionId: order.flwTransactionId,
+      })
+    }
+    // Fulfilled anyway, per Flutterwave's guidance to give value and refund
+    // the rest (see checkPaidAmount). The refund is manual.
+    if (assessment.overpaidMinor > 0) {
+      console.error('[orders] charge exceeds the amount requested', {
+        orderId: order.id,
+        flwTransactionId,
+        requestedAmount: toFlutterwaveAmount(order.totalMinor),
+        paidAmount: charge.amount,
+        overpaidMinor: assessment.overpaidMinor,
+      })
+    }
+
     return {
-      order: {
-        ...order,
-        status: 'paid' as const,
-        paidAt,
-        flwTransactionId: flwTransactionId ?? order.flwTransactionId ?? null,
-      },
+      outcome: 'fulfilled',
+      order: { ...order, status: 'paid' as const, paidAt, flwTransactionId },
       justFulfilled: true,
     }
   })

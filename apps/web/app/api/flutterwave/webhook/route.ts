@@ -104,10 +104,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    const result = await fulfillOrder({
-      orderId: order.id,
-      flwTransactionId: String(tx.id),
-    })
+    // fulfillOrder re-checks the verified charge (status, tx_ref, amount,
+    // currency) against the locked order before it mints anything.
+    const result = await fulfillOrder({ orderId: order.id, charge: tx })
     if (!result) {
       console.error('[webhook] verified charge maps to a missing order row', {
         orderId: order.id,
@@ -117,6 +116,18 @@ export async function POST(req: Request) {
       return NextResponse.json(
         { ok: false, reason: 'order missing' },
         { status: 404 }
+      )
+    }
+
+    if (result.outcome === 'rejected') {
+      // Underpaid or wrong-currency charge. fulfillOrder has logged expected
+      // vs received and recorded the charge on the order (now 'failed'). It is
+      // refused with a 4xx like the other rejections above, so it shows up in
+      // request telemetry instead of passing as a 200. A Flutterwave retry
+      // re-runs the same check and cannot change the outcome.
+      return NextResponse.json(
+        { ok: false, reason: 'charge does not pay for the order' },
+        { status: 422 }
       )
     }
 

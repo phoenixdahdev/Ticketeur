@@ -15,6 +15,7 @@ import {
   type MintTicket,
 } from '../../lib/orders'
 import { calculateFeeMinor } from '../../lib/fees'
+import { PAYMENT_CURRENCY, toFlutterwaveAmount } from '../../lib/payment-amount'
 import { hasEnded } from '../../lib/predicates'
 import { validateVoucher } from '../../lib/vouchers'
 
@@ -294,14 +295,16 @@ export const publicCheckoutRouter = createTRPCRouter({
       return { orderId, txRef: null, paymentUrl: null, free: true }
     }
 
-    // Paid path — hand off to Flutterwave. Amount in major units (NGN).
+    // Paid path — hand off to Flutterwave. Amount in whole naira, converted by
+    // the same helper fulfilment verifies the charge against, so what we ask
+    // for and what we accept cannot drift apart.
     const summaryLabel = lines
       .map((l) => `${l.quantity}× ${l.tier.name}`)
       .join(', ')
     const { link } = await createPayment({
       txRef,
-      amount: Math.round(totalMinor / 100),
-      currency: 'NGN',
+      amount: toFlutterwaveAmount(totalMinor),
+      currency: PAYMENT_CURRENCY,
       redirectUrl: `${baseUrl}/checkout/return`,
       customer: {
         email: input.buyerEmail,

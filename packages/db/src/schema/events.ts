@@ -246,7 +246,9 @@ export const orders = pgTable(
       >(),
     status: text('status').$type<OrderStatus>().notNull().default('pending'),
     // Flutterwave correlation — tx_ref is what we send, transaction_id is
-    // what FW returns once the customer pays.
+    // what FW returns once the customer pays. On a 'failed' order a
+    // transaction_id is the charge fulfilment rejected (underpaid or wrong
+    // currency) and still needs a refund; see fulfillOrder.
     flwTxRef: text('flw_tx_ref'),
     flwTransactionId: text('flw_transaction_id'),
     ticketsPdfUrl: text('tickets_pdf_url'),

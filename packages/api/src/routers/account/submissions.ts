@@ -297,32 +297,56 @@ export const accountSubmissionsRouter = createTRPCRouter({
       }
 
       const totalMinor = row.orderTotalMinor ?? 0
-      const { link } = await createPayment({
-        txRef: row.orderTxRef,
-        // The order's total, through the same converter fulfilment verifies
-        // the charge against, so what we ask for and what we accept cannot
-        // drift apart. Asking for anything less would make the charge land as
-        // underpaid.
-        amount: toFlutterwaveAmount(totalMinor),
-        currency: PAYMENT_CURRENCY,
-        redirectUrl: `${getBaseUrl()}/checkout/return`,
-        customer: {
-          email: ctx.session.user.email,
-          name: ctx.session.user.name,
-        },
-        meta: {
-          orderId: row.orderId,
+      let link: string
+      try {
+        ;({ link } = await createPayment({
+          txRef: row.orderTxRef,
+          // The order's total, through the same converter fulfilment verifies
+          // the charge against, so what we ask for and what we accept cannot
+          // drift apart. Asking for anything less would make the charge land
+          // as underpaid.
+          amount: toFlutterwaveAmount(totalMinor),
+          currency: PAYMENT_CURRENCY,
+          redirectUrl: `${getBaseUrl()}/checkout/return`,
+          customer: {
+            email: ctx.session.user.email,
+            name: ctx.session.user.name,
+          },
+          meta: {
+            orderId: row.orderId,
+            submissionId: row.id,
+            formId: row.formId,
+            eventId: row.eventId,
+          },
+          customizations: {
+            title: row.eventTitle,
+            description: row.priceOptionName
+              ? `${row.formTitle}: ${row.priceOptionName}`
+              : row.formTitle,
+          },
+        }))
+      } catch (err) {
+        // Nothing has changed: no order was created, no spot was taken and no
+        // spot is given back — the application is exactly as it was and can be
+        // resumed again. Unlike intake's equivalent failure, which releases the
+        // spot it had just claimed, there is nothing here to undo.
+        //
+        // The gateway refusing a second checkout on a tx_ref it has already
+        // seen would land here, so it is the case this message is written for.
+        // Applying again is the way out: the stale unpaid application is
+        // replaced once it is a minute old (lib/form-applicants.ts).
+        console.error('[forms] could not reopen a registration payment', {
           submissionId: row.id,
-          formId: row.formId,
-          eventId: row.eventId,
-        },
-        customizations: {
-          title: row.eventTitle,
-          description: row.priceOptionName
-            ? `${row.formTitle}: ${row.priceOptionName}`
-            : row.formTitle,
-        },
-      })
+          orderId: row.orderId,
+          txRef: row.orderTxRef,
+          error: err,
+        })
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message:
+            "We couldn't reopen the payment page. Please try again in a moment, or go back to the form and apply again.",
+        })
+      }
 
       return { paymentUrl: link, totalMinor }
     }),

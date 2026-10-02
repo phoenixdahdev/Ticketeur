@@ -31,10 +31,7 @@ export type {
   ReportStatus,
 } from './events'
 export { vendorReviews, vendorReviewsRelations } from './reviews'
-export {
-  vendorProfileViews,
-  vendorProfileViewsRelations,
-} from './analytics'
+export { vendorProfileViews, vendorProfileViewsRelations } from './analytics'
 export { vouchers, vouchersRelations } from './vouchers'
 export type { VoucherDiscountType } from './vouchers'
 export {
@@ -63,11 +60,32 @@ export {
   platformFeeChangesRelations,
   PLATFORM_SETTINGS_ROW_ID,
 } from './platform-settings'
-export {
-  paymentDiscrepancies,
-  paymentDiscrepanciesRelations,
-} from './payments'
+export { paymentDiscrepancies, paymentDiscrepanciesRelations } from './payments'
 export type {
   PaymentDiscrepancyKind,
   PaymentDiscrepancyStatus,
 } from './payments'
+export {
+  contests,
+  contestCategories,
+  entries,
+  voteBundles,
+  voteCredits,
+  votes,
+  nominations,
+  voteOtps,
+  contestsRelations,
+  contestCategoriesRelations,
+  entriesRelations,
+  voteBundlesRelations,
+  voteCreditsRelations,
+  votesRelations,
+  nominationsRelations,
+  voteOtpsRelations,
+} from './contests'
+export type {
+  ContestStatus,
+  EntryStatus,
+  VoteKind,
+  NominationStatus,
+} from './contests'

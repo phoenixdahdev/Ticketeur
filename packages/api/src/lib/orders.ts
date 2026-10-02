@@ -459,8 +459,9 @@ export async function fulfillOrder({
 
 /**
  * Generate the PDF(s) + dispatch confirmation email(s) for a paid order.
- * Both the FW webhook and the /checkout/return page call this — guarded
- * by `justFulfilled` from `fulfillOrder` so it runs exactly once.
+ * The FW webhook, the /checkout/return page and the reconciliation job call
+ * this — guarded by `justFulfilled` from `fulfillOrder` so it runs exactly
+ * once.
  *
  * "For Myself" orders send one email to the buyer with a combined PDF. "For
  * Multiple" orders send each attendee their own email + a PDF scoped to just

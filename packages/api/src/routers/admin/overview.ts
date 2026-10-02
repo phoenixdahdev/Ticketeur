@@ -1,6 +1,6 @@
 import { count, desc, eq, sql } from 'drizzle-orm'
 
-import { events, orders, reports, user } from '@ticketur/db'
+import { events, forms, orders, reports, user } from '@ticketur/db'
 
 import { adminProcedure, createTRPCRouter } from '../../trpc'
 import {
@@ -8,6 +8,7 @@ import {
   NOT_DRAFT,
   VENDOR_PENDING,
   EVENT_PENDING,
+  FORM_PENDING,
   REPORT_OPEN,
 } from '../../lib/predicates'
 
@@ -44,11 +45,16 @@ export const adminOverviewRouter = createTRPCRouter({
       .select({ value: count(reports.id) })
       .from(reports)
       .where(REPORT_OPEN)
+    const [pendingFormRow] = await ctx.db
+      .select({ value: count(forms.id) })
+      .from(forms)
+      .where(FORM_PENDING)
 
     const pending =
       Number(pendingVendorRow?.value ?? 0) +
       Number(pendingEventRow?.value ?? 0) +
-      Number(reportRow?.value ?? 0)
+      Number(reportRow?.value ?? 0) +
+      Number(pendingFormRow?.value ?? 0)
 
     return {
       totalUsers: Number(userRow?.value ?? 0),

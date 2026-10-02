@@ -92,12 +92,15 @@ export function SubmissionDetail({
       onSuccess: (result) => {
         setRejecting(false)
         setReason('')
+        const paid = data?.feePaidMinor ?? null
         toast.success(
           result.changed ? 'Rejected' : 'This application was already rejected',
           {
-            description: result.changed
-              ? 'The applicant has been emailed your reason.'
-              : undefined,
+            description: !result.changed
+              ? undefined
+              : paid !== null
+                ? `The applicant has been emailed your reason, and their ${formatOptionPrice(paid)} fee is queued to be refunded.`
+                : 'The applicant has been emailed your reason.',
           }
         )
         invalidate()
@@ -130,9 +133,11 @@ export function SubmissionDetail({
     )
   }
 
-  const { submission, priceOption, reviewer, answers } = data
+  const { submission, priceOption, reviewer, answers, feePaidMinor } = data
   const awaitingPayment = submission.status === 'pending_payment'
   const busy = approve.isPending || reject.isPending
+  // Non-null only when the fee actually cleared, so rejecting owes it back.
+  const feePaid = feePaidMinor !== null ? formatOptionPrice(feePaidMinor) : null
 
   return (
     <div className="flex min-h-0 flex-1 [scrollbar-width:none] flex-col gap-6 overflow-y-auto md:gap-8 [&::-webkit-scrollbar]:hidden">
@@ -240,6 +245,12 @@ export function SubmissionDetail({
         <div className="shrink-0 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-100">
           <p className="font-semibold">You rejected this application</p>
           <p className="mt-1 whitespace-pre-wrap">“{submission.reason}”</p>
+          {feePaid ? (
+            <p className="mt-2">
+              Their {feePaid} fee is on Ticketeur&apos;s refunds list and will
+              be paid back to them by hand.
+            </p>
+          ) : null}
         </div>
       ) : null}
 
@@ -297,6 +308,15 @@ export function SubmissionDetail({
             <DialogDescription>
               Your reason is emailed to the applicant, so write it for them.
               Their spot is released for someone else.
+              {feePaid ? (
+                <>
+                  {' '}
+                  They paid {feePaid} to apply, so rejecting them puts that
+                  amount on Ticketeur&apos;s refunds list to be paid back by
+                  hand. It is not refunded the moment you click — allow a few
+                  working days for it to reach them.
+                </>
+              ) : null}
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-2">

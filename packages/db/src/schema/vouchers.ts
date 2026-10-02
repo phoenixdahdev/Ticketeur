@@ -45,8 +45,8 @@ export const vouchers = pgTable(
     }),
     code: text('code').notNull(),
     discountType: text('discount_type').$type<VoucherDiscountType>().notNull(),
-    // percent → basis points (2000 = 20%), matching the SERVICE_FEE_BPS
-    // convention. fixed → minor units (kobo).
+    // percent → basis points (2000 = 20%), the same convention the platform
+    // service-fee rates use (platform_settings). fixed → minor units (kobo).
     discountValue: integer('discount_value').notNull(),
     // NULL = unlimited redemptions.
     maxRedemptions: integer('max_redemptions'),

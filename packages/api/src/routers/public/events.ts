@@ -10,6 +10,7 @@ import {
   notCurrentlyBanned,
   stillRunning,
 } from '../../lib/predicates'
+import { getFeeRates } from '../../lib/platform-settings'
 
 const listInput = z.object({
   q: z.string().default(''),
@@ -235,12 +236,23 @@ export const publicEventsRouter = createTRPCRouter({
       // happened. Archived and still upcoming means the organizer pulled it.
       if (event.status === 'archived' && !ended) return null
 
+      // The ticket service-fee rate travels with the tier prices it applies
+      // to. The tickets tab already makes this query and renders a skeleton
+      // until it lands, so by the time any price is on screen the rate is
+      // there too — no second round trip, and no moment at which a subtotal is
+      // shown without the fee that goes with it. DISPLAY only: checkout.start
+      // re-reads the rate and that figure is what gets charged.
+      const feeRates = await getFeeRates(ctx.db)
+
       return {
         event,
         tiers,
         vendors,
         minPriceMinor: minPrice ?? 0,
         hasEnded: ended,
+        // Basis points (500 = 5%). Apply it with calculateFeeMinor from
+        // @ticketur/api/lib/fees, the same function the server charges with.
+        serviceFeeBps: feeRates.ticket,
       }
     }),
 })

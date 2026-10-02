@@ -18,7 +18,8 @@ export type VoucherValidation =
 
 /**
  * The discount a voucher yields on a given subtotal, in minor units.
- * `percent` stores basis points (2000 = 20%), matching SERVICE_FEE_BPS;
+ * `percent` stores basis points (2000 = 20%), the same unit the platform
+ * service-fee rates use (lib/fees.ts);
  * `fixed` stores minor units directly. Never exceeds the subtotal and never
  * goes negative.
  */

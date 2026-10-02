@@ -15,6 +15,7 @@ import {
   type MintTicket,
 } from '../../lib/orders'
 import { calculateFeeMinor } from '../../lib/fees'
+import { getTicketFeeBps } from '../../lib/platform-settings'
 import { PAYMENT_CURRENCY, toFlutterwaveAmount } from '../../lib/payment-amount'
 import { hasEnded } from '../../lib/predicates'
 import { validateVoucher } from '../../lib/vouchers'
@@ -196,7 +197,16 @@ export const publicCheckoutRouter = createTRPCRouter({
     }
 
     const discountedSubtotal = Math.max(0, subtotalMinor - discountMinor)
-    const feeMinor = calculateFeeMinor(discountedSubtotal)
+    // The rate is read here, from the database, every time. Whatever the
+    // buyer's page was showing is irrelevant: the client never sends a fee or
+    // a total (look at startInput — there is no money in it), so a stale rate
+    // in a long-open tab can only make the preview wrong, never the charge.
+    // This figure is the one stored on the order and the one Flutterwave is
+    // asked for.
+    const feeMinor = calculateFeeMinor(
+      discountedSubtotal,
+      await getTicketFeeBps(ctx.db)
+    )
     const totalMinor = discountedSubtotal + feeMinor
     const isFree = totalMinor === 0
 

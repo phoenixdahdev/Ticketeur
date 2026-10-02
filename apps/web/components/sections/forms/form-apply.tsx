@@ -12,6 +12,7 @@ import {
   UserGroupIcon,
 } from '@hugeicons/core-free-icons'
 
+import { calculateFeeMinor } from '@ticketur/api/lib/fees'
 import { validateAnswers } from '@ticketur/api/lib/form-fields'
 import { cn } from '@ticketur/ui/lib/utils'
 import { Button } from '@ticketur/ui/components/button'
@@ -71,7 +72,7 @@ export function FormApply({
   const router = useRouter()
   const session = useSession()
 
-  const { fields, priceOptions, form, event } = data
+  const { fields, priceOptions, form, event, serviceFeeBps } = data
   const returnTo = `/forms/${slug}`
 
   // The popup sign-in resolves before the session store catches up, and the
@@ -160,6 +161,12 @@ export function FormApply({
   const selectedOption =
     priceOptions.find((o) => o.id === priceOptionId) ?? null
   const amountMinor = selectedOption?.priceMinor ?? 0
+  // Registration fees now carry the platform service fee, as ticket sales
+  // always have. The rate rode in on the same bySlug query that priced the
+  // options, so it is already here; submit re-reads it server-side and that
+  // figure is the one charged, so this can only ever be a preview.
+  const feeMinor = calculateFeeMinor(amountMinor, serviceFeeBps)
+  const payableMinor = amountMinor + feeMinor
   const uploading = Object.values(uploadBusy).some(Boolean)
 
   function focusProblem(fieldId: string | null) {
@@ -498,13 +505,31 @@ export function FormApply({
             ) : null}
 
             {amountMinor > 0 ? (
-              <div className="bg-muted/50 flex items-baseline justify-between gap-4 rounded-xl px-4 py-3">
-                <span className="text-muted-foreground text-sm">
-                  {selectedOption?.name}
-                </span>
-                <span className="font-heading text-foreground text-lg font-bold">
-                  {formatNaira(amountMinor)}
-                </span>
+              <div className="bg-muted/50 flex flex-col gap-2 rounded-xl px-4 py-3">
+                <div className="flex items-baseline justify-between gap-4 text-sm">
+                  <span className="text-muted-foreground">
+                    {selectedOption?.name}
+                  </span>
+                  <span className="text-foreground font-semibold">
+                    {formatNaira(amountMinor)}
+                  </span>
+                </div>
+                {feeMinor > 0 ? (
+                  <div className="flex items-baseline justify-between gap-4 text-sm">
+                    <span className="text-muted-foreground">Service fee</span>
+                    <span className="text-foreground font-semibold">
+                      {formatNaira(feeMinor)}
+                    </span>
+                  </div>
+                ) : null}
+                <div className="border-border/60 flex items-baseline justify-between gap-4 border-t pt-2">
+                  <span className="text-foreground text-sm font-semibold">
+                    Total
+                  </span>
+                  <span className="font-heading text-foreground text-lg font-bold">
+                    {formatNaira(payableMinor)}
+                  </span>
+                </div>
               </div>
             ) : null}
 
@@ -530,7 +555,7 @@ export function FormApply({
                   Waiting for your files…
                 </>
               ) : amountMinor > 0 ? (
-                `Pay ${formatNaira(amountMinor)} and apply`
+                `Pay ${formatNaira(payableMinor)} and apply`
               ) : (
                 'Submit application'
               )}

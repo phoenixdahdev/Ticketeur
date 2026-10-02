@@ -15,6 +15,7 @@ import {
   CouponPercentIcon,
   Mail01Icon,
   Logout02Icon,
+  Settings02Icon,
 } from '@hugeicons/core-free-icons'
 
 import { cn } from '@ticketur/ui/lib/utils'
@@ -48,6 +49,7 @@ const NAV_LINKS: NavLink[] = [
   { href: '/vouchers', label: 'Vouchers', icon: CouponPercentIcon },
   { href: '/emails', label: 'Emails', icon: Mail01Icon },
   { href: '/moderation', label: 'Moderation', icon: Shield01Icon },
+  { href: '/settings', label: 'Settings', icon: Settings02Icon },
 ]
 
 function getInitials(name: string) {

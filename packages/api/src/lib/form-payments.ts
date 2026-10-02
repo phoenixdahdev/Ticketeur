@@ -9,6 +9,7 @@ import {
   submissions,
 } from '@ticketur/db'
 
+import { calculateFeeMinor } from './fees'
 import { completedStatus, releaseFormSpot, type DbTransaction } from './forms'
 import { newId } from './ids'
 
@@ -49,22 +50,46 @@ export const SPOT_HOLDING_STATUSES = [
 // transaction, so the order commits or rolls back with the submission and the
 // spot it claimed.
 //
-// The applicant is charged the option's price exactly. Unlike a ticket order,
-// no platform service fee (lib/fees.ts) is added: the codebase sets one only
-// for tickets, and whether registration revenue carries one is an open
-// question in the spec ("Platform fee on vote and registration revenue").
-// Adding one later means feeMinor here and the amount the form page shows.
+// The applicant pays the option's price PLUS the platform's registration
+// service fee, exactly as a ticket buyer pays the ticket price plus the ticket
+// fee. The two have separate, admin-configurable rates (platform_settings);
+// this one used to be hardcoded at zero.
+//
+// `feeBps` is passed in rather than read here. The caller reads it once,
+// before opening the transaction, and the three numbers this returns are the
+// only ones anyone should use afterwards: the order row and the amount
+// Flutterwave is asked for are then computed from a single rate read, so they
+// cannot disagree. (They must not: fulfilOrder verifies a charge against
+// `orders.totalMinor`, so a Flutterwave request for anything less would make
+// every paid registration land as underpaid.)
+//
+// What this writes is a SNAPSHOT. `orders.feeMinor` and `orders.totalMinor`
+// are written here once and never recomputed from a rate, so a later change to
+// the registration rate cannot touch this order, its receipt, or the amount
+// its pending payment link is for.
 export async function createRegistrationOrder(
   tx: DbTransaction,
   args: {
     submissionId: string
     eventId: string
+    // The chosen option's price, in minor units, before the service fee.
     amountMinor: number
+    // The registration service-fee rate in basis points, from getFeeRates.
+    feeBps: number
     applicant: { id: string; name: string; email: string }
   }
-): Promise<{ orderId: string; txRef: string }> {
+): Promise<{
+  orderId: string
+  txRef: string
+  // The option's price, the fee charged on it, and what the applicant pays.
+  subtotalMinor: number
+  feeMinor: number
+  totalMinor: number
+}> {
   const orderId = newId('ord')
   const txRef = `reg_${orderId}_${Date.now()}`
+  const feeMinor = calculateFeeMinor(args.amountMinor, args.feeBps)
+  const totalMinor = args.amountMinor + feeMinor
   await tx.insert(orders).values({
     id: orderId,
     type: 'registration_fee',
@@ -77,8 +102,8 @@ export async function createRegistrationOrder(
     quantity: 1,
     subtotalMinor: args.amountMinor,
     discountMinor: 0,
-    feeMinor: 0,
-    totalMinor: args.amountMinor,
+    feeMinor,
+    totalMinor,
     status: 'pending',
     flwTxRef: txRef,
   })
@@ -86,7 +111,13 @@ export async function createRegistrationOrder(
     .update(submissions)
     .set({ orderId })
     .where(eq(submissions.id, args.submissionId))
-  return { orderId, txRef }
+  return {
+    orderId,
+    txRef,
+    subtotalMinor: args.amountMinor,
+    feeMinor,
+    totalMinor,
+  }
 }
 
 // ─── Crediting the payment ──────────────────────────────────────────────────

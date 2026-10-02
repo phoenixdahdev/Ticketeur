@@ -28,11 +28,23 @@ function truncate(text: string, max = 160): string {
   return `${flat.slice(0, max - 1).trimEnd()}…`
 }
 
-// Shares the request's query client with the page below, so the form is read
-// once and the page's prefetch is a cache hit.
+// This read IS the prefetch. getServerTRPC is cached per request, so the
+// result lands in the very query client HydrateClient dehydrates, under the
+// key the client's own bySlug({ slug }) asks for — metadata and the page share
+// one database round trip, and the client hydrates instead of refetching.
+//
+// `undefined` means the read itself failed. A database blip is not a missing
+// form: it must not 404 and it must not take the page down, so the page falls
+// through and the client query (which retries) picks it up.
 async function loadForm(slug: string) {
   const { trpc, queryClient } = await getServerTRPC()
-  return queryClient.fetchQuery(trpc.public.forms.bySlug.queryOptions({ slug }))
+  try {
+    return await queryClient.fetchQuery(
+      trpc.public.forms.bySlug.queryOptions({ slug })
+    )
+  } catch {
+    return undefined
+  }
 }
 
 export async function generateMetadata(
@@ -41,7 +53,11 @@ export async function generateMetadata(
   const { slug } = await props.params
   const data = await loadForm(slug)
 
-  if (!data) {
+  if (data === undefined) {
+    // The read failed; don't claim anything about the form either way.
+    return { title: 'Apply' }
+  }
+  if (data === null) {
     return {
       title: 'Form not found',
       description: 'This form is no longer available on Ticketeur.',
@@ -81,17 +97,12 @@ export default async function PublicFormPage(
 ) {
   const { slug } = await props.params
 
-  // null means no such form, a form still in draft or under review, or an
-  // event that isn't public. None of them should admit the form exists.
+  // Also the prefetch — see loadForm. null means no such form, a form still in
+  // draft or under review, or an event that isn't public; none of them should
+  // admit the form exists. undefined is a failed read, which falls through to
+  // the client query rather than becoming a 404.
   const data = await loadForm(slug)
-  if (!data) notFound()
-
-  // Same input as the client's first query, or the key differs and this is
-  // thrown away.
-  const { trpc, queryClient } = await getServerTRPC()
-  await queryClient.prefetchQuery(
-    trpc.public.forms.bySlug.queryOptions({ slug })
-  )
+  if (data === null) notFound()
 
   return (
     <HydrateClient>

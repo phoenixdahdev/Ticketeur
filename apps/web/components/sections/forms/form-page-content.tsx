@@ -1,7 +1,10 @@
 'use client'
 
 import { useQuery } from '@tanstack/react-query'
+import { HugeiconsIcon } from '@hugeicons/react'
+import { WifiDisconnected01Icon } from '@hugeicons/core-free-icons'
 
+import { Button } from '@ticketur/ui/components/button'
 import { Skeleton } from '@ticketur/ui/components/skeleton'
 
 import { useTRPC } from '@/lib/trpc'
@@ -19,11 +22,20 @@ import {
 // the query key differs and the prefetch is quietly wasted.
 export function FormPageContent({ slug }: { slug: string }) {
   const trpc = useTRPC()
-  const { data, isLoading, refetch } = useQuery(
+  const { data, isLoading, isError, isFetching, refetch } = useQuery(
     trpc.public.forms.bySlug.queryOptions({ slug })
   )
 
   if (isLoading) return <FormPageSkeleton />
+
+  // A connection that dropped, not a form that went away. Worth separating:
+  // this page is read on phone data, and telling someone their form was taken
+  // down when the train went into a tunnel would be a lie they act on.
+  if (isError) {
+    return (
+      <FormLoadFailed onRetry={() => void refetch()} retrying={isFetching} />
+    )
+  }
 
   // The page only renders at all because the server found this form, so null
   // here means it stopped being public while someone was looking at it —
@@ -38,6 +50,36 @@ export function FormPageContent({ slug }: { slug: string }) {
       <FormEventHeader form={data.form} event={data.event} />
       <FormApply data={data} slug={slug} onRefetch={() => void refetch()} />
     </div>
+  )
+}
+
+function FormLoadFailed({
+  onRetry,
+  retrying,
+}: {
+  onRetry: () => void
+  retrying: boolean
+}) {
+  return (
+    <section className="border-border bg-card flex flex-col items-center gap-4 rounded-2xl border p-8 text-center md:p-10">
+      <span className="bg-muted text-muted-foreground flex size-14 items-center justify-center rounded-full">
+        <HugeiconsIcon
+          icon={WifiDisconnected01Icon}
+          className="size-7"
+          strokeWidth={1.8}
+        />
+      </span>
+      <h2 className="font-heading text-foreground text-2xl font-bold tracking-tight">
+        We couldn&apos;t load this form
+      </h2>
+      <p className="text-muted-foreground max-w-prose text-sm leading-6">
+        Check your connection and try again. Anything you had already filled in
+        is still saved on this device.
+      </p>
+      <Button type="button" size="xl" onClick={onRetry} disabled={retrying}>
+        {retrying ? 'Trying…' : 'Try again'}
+      </Button>
+    </section>
   )
 }
 

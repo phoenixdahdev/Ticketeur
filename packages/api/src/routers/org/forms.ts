@@ -29,6 +29,7 @@ import {
   recordContentChange,
   unchangedReview,
 } from '../../lib/form-review'
+import { getFeeRates } from '../../lib/platform-settings'
 
 import { orgFormFieldsRouter } from './form-fields'
 import { orgFormPriceOptionsRouter } from './form-price-options'
@@ -241,7 +242,7 @@ export const orgFormsRouter = createTRPCRouter({
       if (!found || !managesEvent(ctx, found.event.organizerId)) return null
       const { form, event } = found
 
-      const [fields, priceOptions, countRows] = await Promise.all([
+      const [fields, priceOptions, countRows, feeRates] = await Promise.all([
         ctx.db
           .select()
           .from(formFields)
@@ -256,6 +257,12 @@ export const orgFormsRouter = createTRPCRouter({
           .select(countColumns)
           .from(submissions)
           .where(eq(submissions.formId, form.id)),
+        // The registration service-fee rate travels with the prices it
+        // applies to, exactly as it does on public.forms.bySlug: the builder
+        // already makes this query, so the preview can show what an applicant
+        // will actually pay without a second round trip, and without a moment
+        // where a booth price is on screen beside no fee.
+        getFeeRates(ctx.db),
       ])
 
       return {
@@ -270,6 +277,11 @@ export const orgFormsRouter = createTRPCRouter({
         },
         fields,
         priceOptions,
+        // Basis points (500 = 5%). Apply it with calculateFeeMinor from
+        // ../../lib/fees, the function the charge itself is computed with.
+        // Display only: public.forms.submit re-reads the rate and that figure
+        // is the one the applicant is charged.
+        serviceFeeBps: feeRates.registration,
         counts: countRows[0] ?? {
           total: 0,
           pendingPayment: 0,

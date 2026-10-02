@@ -47,6 +47,25 @@ const UPLOAD_KINDS = {
     allow: ['image/jpeg', 'image/png', 'image/webp', 'image/avif'],
     requireVendor: true,
   },
+  // Registration-form answers (image / images / file fields). Deliberately
+  // role-free: an applicant is whoever signed in — usually an attendee — so
+  // requiring a role here would make every upload field unusable. A session
+  // is still required (above), and the per-user prefix still applies.
+  //
+  // The MIME lists mirror IMAGE_MIME_TYPES / PDF_MIME_TYPES in
+  // packages/api/src/lib/form-fields.ts, which is what validates the stored
+  // URL at submit; a field may accept fewer types than its kind allows, and
+  // the server enforces that per field.
+  'form-image': {
+    folder: 'forms/images',
+    maxBytes: 8 * 1024 * 1024,
+    allow: ['image/jpeg', 'image/png', 'image/webp', 'image/avif'],
+  },
+  'form-document': {
+    folder: 'forms/documents',
+    maxBytes: 8 * 1024 * 1024,
+    allow: ['application/pdf'],
+  },
 } as const
 
 type UploadKind = keyof typeof UPLOAD_KINDS

@@ -231,6 +231,7 @@ export const publicCheckoutRouter = createTRPCRouter({
 
       await tx.insert(orders).values({
         id: orderId,
+        type: 'ticket',
         eventId: event.id,
         tierId: null,
         buyerId: existing?.id ?? null,

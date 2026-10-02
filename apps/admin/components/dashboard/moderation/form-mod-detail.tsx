@@ -24,6 +24,7 @@ import { Textarea } from '@ticketur/ui/components/textarea'
 import type { RouterOutputs } from '@ticketur/api'
 
 import { ApproveRejectActions } from '@/components/dashboard/moderation/approve-reject-actions'
+import { TakeDownFormAction } from '@/components/dashboard/moderation/take-down-form-action'
 import {
   formatEventDateRange,
   formatShortDate as formatJoined,
@@ -63,6 +64,7 @@ const STATUS_LABEL: Record<ReviewForm['status'], string> = {
   published: 'live',
   rejected: 'rejected',
   closed: 'closed',
+  suspended: 'taken down',
 }
 
 const EVENT_STATUS_LABEL: Record<ReviewForm['event']['status'], string> = {
@@ -319,6 +321,16 @@ export function FormModDetail({
           redirectTo="/moderation?tab=forms"
         />
       ) : null}
+
+      {/* A form the public can reach: live, or closed with its page still up.
+          Approval is behind it, so the only moderation left is pulling it. */}
+      {form.status === 'published' || form.status === 'closed' ? (
+        <TakeDownFormAction
+          id={form.id}
+          name={form.title}
+          live={form.status === 'published'}
+        />
+      ) : null}
     </div>
   )
 }
@@ -333,6 +345,18 @@ const NOTICE_TONE = {
 
 // Why this form is in front of the admin, when it isn't simply new.
 function ReviewNotice({ form }: { form: ReviewForm }) {
+  if (form.status === 'suspended') {
+    return (
+      <Notice tone="danger" title="This form was taken down">
+        It takes no applications and its page is not public. Its organizer can
+        only get it back by fixing it and submitting it for review
+        {reviewedLabel(form) ? `. Taken down${reviewedLabel(form)}` : ''}.
+        <span className="mt-2 block font-medium whitespace-pre-wrap">
+          “{form.rejectionReason}”
+        </span>
+      </Notice>
+    )
+  }
   if (form.status !== 'pending_review') {
     return (
       <Notice tone="muted" title={`This form is ${STATUS_LABEL[form.status]}`}>

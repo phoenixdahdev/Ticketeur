@@ -38,7 +38,11 @@ export type {
   VoucherCodePayload,
   AdminBroadcastPayload,
 } from './schema'
-export { formApprovedSchema, formRejectedSchema } from './schema'
+export {
+  formApprovedSchema,
+  formRejectedSchema,
+  formTakenDownSchema,
+} from './schema'
 export type { FormApprovedPayload, FormRejectedPayload } from './schema'
 export {
   submissionConfirmationSchema,

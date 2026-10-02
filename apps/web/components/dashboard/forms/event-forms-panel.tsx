@@ -63,7 +63,9 @@ export function EventFormsPanel({ eventId }: { eventId: string }) {
                   <p className="text-muted-foreground text-xs">
                     {FORM_TYPE_LABEL[form.type]} · {intakeWindowLabel(form)}
                   </p>
-                  {form.status === 'rejected' && form.rejectionReason ? (
+                  {(form.status === 'rejected' ||
+                    form.status === 'suspended') &&
+                  form.rejectionReason ? (
                     <p className="line-clamp-2 text-xs text-rose-600 dark:text-rose-400">
                       {form.rejectionReason}
                     </p>

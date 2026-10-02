@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import { and, asc, count, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
 import { TRPCError } from '@trpc/server'
 import { tasks } from '@trigger.dev/sdk'
 import { addDays } from 'date-fns'
@@ -88,6 +88,21 @@ function notAwaitingReview(): TRPCError {
 
 function assertAwaitingReview(status: FormStatus): void {
   if (status !== 'pending_review') throw notAwaitingReview()
+}
+
+// The two statuses a form is publicly reachable in (the allow-list in
+// public/forms.ts): taking submissions, or closed but still showing its page.
+// Those are what there is to take down.
+const TAKE_DOWN_FROM: FormStatus[] = ['published', 'closed']
+
+function notTakeDownable(status: FormStatus): TRPCError {
+  return new TRPCError({
+    code: 'BAD_REQUEST',
+    message:
+      status === 'suspended'
+        ? 'This form has already been taken down.'
+        : 'This form is not public, so there is nothing to take down.',
+  })
 }
 
 function formChangedError(): TRPCError {
@@ -1102,6 +1117,91 @@ export const adminModerationRouter = createTRPCRouter({
       if (updated.length === 0) throw notAwaitingReview()
 
       void tasks.trigger('send-form-rejected', {
+        email: target.organizer.email,
+        organizerName: target.organizer.orgName ?? target.organizer.name,
+        formTitle: target.form.title,
+        eventTitle: target.eventTitle,
+        reason: input.reason,
+        manageUrl: formLinks(target.form).manageUrl,
+      })
+
+      return { ok: true as const }
+    }),
+
+  // Pulls a public form down: intake stops at once and its page goes with it.
+  // The remedy when something got past review — a question asking for bank
+  // details, a form that turns out to be fraudulent — or when a closed form's
+  // still-public wording has to go.
+  //
+  // Why 'suspended' and not 'closed': a closed form keeps a public page and
+  // its organizer reopens it in one click, without a second review, while its
+  // content is still the approved revision (org.forms.reopen). A takedown that
+  // left the form reopenable would be worthless. 'suspended' is reachable only
+  // from here, org.forms.reopen refuses anything that isn't 'closed', and the
+  // approval this clears is the one reopen checks — three separate reasons the
+  // organizer cannot undo it. Everything they CAN do is fix the form and
+  // submit it, which puts it back in this queue for an admin to approve.
+  //
+  // Submissions are untouched, and so is fulfilment: someone whose payment
+  // confirms after the takedown is still credited, because the paid path
+  // deliberately does not consult the form's status.
+  takeDownForm: adminProcedure
+    .input(
+      z.object({
+        id: z.string().min(1),
+        reason: z
+          .string()
+          .trim()
+          .min(1, 'Say why this form is being taken down')
+          .max(2000),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const target = await findFormForReview(ctx.db, input.id)
+      if (!target) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Form not found' })
+      }
+      if (!TAKE_DOWN_FROM.includes(target.form.status)) {
+        throw notTakeDownable(target.form.status)
+      }
+
+      // The status check sits in the UPDATE, so a takedown that races the
+      // organizer closing the form, or an edit sending it back to review,
+      // resolves to one outcome: whichever commits first holds the row, and
+      // the other re-reads the row as it now is. Losing means the form is
+      // already off the public site, which is the safe side.
+      const now = new Date()
+      const updated = await ctx.db
+        .update(forms)
+        .set({
+          status: 'suspended',
+          // Nothing about a form an admin pulled down is approved content any
+          // more. Belt and braces: even if some later path moved a suspended
+          // form to 'closed', reopen's `approvedRevision = contentRevision`
+          // check would still refuse it.
+          approvedRevision: null,
+          reviewerId: ctx.session.user.id,
+          reviewedAt: now,
+          rejectionReason: input.reason,
+          updatedAt: now,
+        })
+        .where(
+          and(eq(forms.id, target.form.id), inArray(forms.status, TAKE_DOWN_FROM))
+        )
+        .returning({ id: forms.id })
+      if (updated.length === 0) {
+        const [current] = await ctx.db
+          .select({ status: forms.status })
+          .from(forms)
+          .where(eq(forms.id, target.form.id))
+          .limit(1)
+        if (!current) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Form not found' })
+        }
+        throw notTakeDownable(current.status)
+      }
+
+      void tasks.trigger('send-form-taken-down', {
         email: target.organizer.email,
         organizerName: target.organizer.orgName ?? target.organizer.name,
         formTitle: target.form.title,

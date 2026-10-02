@@ -188,6 +188,20 @@ export const formRejectedSchema = z.object({
   manageUrl: z.url(),
 })
 export type FormRejectedPayload = z.infer<typeof formRejectedSchema>
+
+// An admin took a form that was already public off the platform. Same shape as
+// a rejection, different message: this form was live, so the organizer is told
+// it has been pulled down rather than that it wasn't approved.
+export const formTakenDownSchema = z.object({
+  email: z.email(),
+  organizerName: z.string(),
+  formTitle: z.string(),
+  eventTitle: z.string(),
+  // Required: an admin can't take a form down without saying why.
+  reason: z.string().min(1),
+  manageUrl: z.url(),
+})
+export type FormTakenDownPayload = z.infer<typeof formTakenDownSchema>
 // ─── Registration form submissions ─────────────────────────────────────────
 // Sent to the applicant. The API triggers these from packages/api/src/lib/
 // form-emails.ts: the confirmation once a submission is complete (on submit

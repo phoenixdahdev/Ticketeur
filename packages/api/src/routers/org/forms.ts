@@ -88,8 +88,16 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 // ─── Review ────────────────────────────────────────────────────────────────
 
 // Where an organizer can send a form to the admin queue from: a draft, a
-// rejected form once fixed, or a closed one being reopened with changes.
-const SUBMITTABLE: FormStatus[] = ['draft', 'rejected', 'closed']
+// rejected form once fixed, a closed one being reopened with changes, or one
+// an admin took down and they have since fixed. A taken-down form is
+// submittable on purpose — it is the one and only route back, and it ends at
+// an admin approving it, so the takedown still holds.
+const SUBMITTABLE: FormStatus[] = [
+  'draft',
+  'rejected',
+  'closed',
+  'suspended',
+]
 
 function assertSubmittable(status: FormStatus): void {
   if (status === 'pending_review') {
@@ -115,6 +123,20 @@ function approvedAsIs(form: {
     form.approvedRevision !== null &&
     form.approvedRevision === form.contentRevision
   )
+}
+
+// Reopening is for a form its organizer closed. A form an admin took down is
+// not one of those, and saying so plainly beats "only a closed form can be
+// reopened" when the organizer is staring at a form that was live this
+// morning.
+function notReopenable(status: FormStatus): TRPCError {
+  return new TRPCError({
+    code: 'BAD_REQUEST',
+    message:
+      status === 'suspended'
+        ? 'An admin took this form down, so it cannot be reopened. Deal with the reason they gave and submit it for review.'
+        : 'Only a closed form can be reopened.',
+  })
 }
 
 function changedSinceApproval(): TRPCError {
@@ -402,16 +424,16 @@ export const orgFormsRouter = createTRPCRouter({
   // unreviewed question live. A form edited since it closed reopens through
   // submit instead. (A form published before reviews existed has no approved
   // revision, so it goes through submit too.)
+  //
+  // This is the one path that puts a form live without an admin, so it is also
+  // the one a takedown has to survive. It does, twice over: 'suspended' is not
+  // 'closed', and takeDownForm clears approvedRevision, so even a suspended
+  // form that somehow reached 'closed' would fail the revision check below.
   reopen: organizerProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const { form, event } = await requireOwnedForm(ctx, input.id)
-      if (form.status !== 'closed') {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Only a closed form can be reopened.',
-        })
-      }
+      if (form.status !== 'closed') throw notReopenable(form.status)
       if (!approvedAsIs(form)) throw changedSinceApproval()
       assertEventAcceptsForms(event)
       assertClosingTimeAhead(form.closesAt, 'reopening it')
@@ -439,12 +461,7 @@ export const orgFormsRouter = createTRPCRouter({
           .where(eq(forms.id, form.id))
           .limit(1)
         if (!current) throw new TRPCError({ code: 'NOT_FOUND' })
-        if (current.status !== 'closed') {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Only a closed form can be reopened.',
-          })
-        }
+        if (current.status !== 'closed') throw notReopenable(current.status)
         throw changedSinceApproval()
       }
 

@@ -333,6 +333,32 @@ export function ReviewStateNotice({
         </Notice>
       )
 
+    case 'suspended':
+      return (
+        <Notice
+          tone="danger"
+          title="An admin took this form off the platform"
+          action={submitButton('Submit for review')}
+        >
+          <p className="font-medium whitespace-pre-wrap">
+            “{form.rejectionReason ?? 'No reason was given.'}”
+          </p>
+          <p className="mt-2">
+            It stopped accepting applications straight away and its page is no
+            longer public. Everything already submitted is kept, and anyone who
+            had already paid is still credited — you can still review them.
+            {form.reviewedAt
+              ? ` Taken down ${formatDateTime(form.reviewedAt)}.`
+              : ''}
+          </p>
+          <p className="mt-2">
+            Deal with that, then submit it for review. It can only go back
+            online once an admin approves it again — there is no reopening a
+            form that was taken down.
+          </p>
+        </Notice>
+      )
+
     case 'closed':
       return (
         <Notice

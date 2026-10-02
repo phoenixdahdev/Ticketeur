@@ -148,10 +148,6 @@ export function FormBuilder({ id }: { id: string }) {
   const { form, event, fields, priceOptions, counts, availability, canReopen } =
     data
   const isLive = form.status === 'published'
-  const canSubmit =
-    form.status === 'draft' ||
-    form.status === 'rejected' ||
-    form.status === 'closed'
   const canDelete = counts.total === 0 && form.claimed === 0
   const submitBlocked = fields.length === 0
 

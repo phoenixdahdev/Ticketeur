@@ -35,11 +35,27 @@ import { events, orders } from './events'
 //                    public, so its title and description are frozen.
 //                    Reopening goes straight back to 'published' only while
 //                    the content is still the revision an admin approved.
+// 'suspended'      — taken down by an admin (admin.moderation.takeDownForm):
+//                    intake stops at once and the public page goes with it.
+//                    The same word, and the same meaning, as the admin
+//                    moderation state on events. Deliberately NOT 'closed':
+//                    a closed form keeps a public page and its organizer can
+//                    reopen it in one click without another review, which is
+//                    exactly what a takedown must not allow. The only way
+//                    back to live is the organizer fixing it and an admin
+//                    approving it again — approvedRevision is cleared, so
+//                    nothing can treat it as still-approved content.
+//                    rejectionReason carries why, as it does for a rejection.
 //
-// The public lookup and intake both allow-list statuses, so 'pending_review'
-// and 'rejected' are hidden and take no submissions.
+// The public lookup and intake both allow-list statuses, so 'pending_review',
+// 'rejected' and 'suspended' are hidden and take no submissions.
 export type FormStatus =
-  'draft' | 'pending_review' | 'published' | 'rejected' | 'closed'
+  | 'draft'
+  | 'pending_review'
+  | 'published'
+  | 'rejected'
+  | 'closed'
+  | 'suspended'
 
 // What the form is for. It labels the form (dashboard filters, copy); no
 // server rule branches on it.
@@ -102,6 +118,8 @@ export const forms = pgTable(
     contentRevision: integer('content_revision').notNull().default(0),
     // The contentRevision an admin last approved; NULL = never approved. A
     // closed form still at this revision can reopen without another review.
+    // A takedown clears it back to NULL: nothing about a form an admin pulled
+    // down counts as approved any more.
     approvedRevision: integer('approved_revision'),
     // When the form last entered 'pending_review': submitted by its organizer,
     // or sent back by an edit to a live form. Orders the admin queue.
@@ -112,9 +130,9 @@ export const forms = pgTable(
       onUpdate: 'cascade',
     }),
     reviewedAt: timestamp('reviewed_at'),
-    // Why the latest rejection was made, written for the organizer. Kept
-    // through resubmission, so the next reviewer sees what was asked for;
-    // cleared on approval.
+    // Why the latest rejection or takedown was decided, written for the
+    // organizer. Kept through resubmission, so the next reviewer sees what was
+    // asked for; cleared on approval.
     rejectionReason: text('rejection_reason'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),

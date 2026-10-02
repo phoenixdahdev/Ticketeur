@@ -23,6 +23,17 @@ export function alreadyEnded(today: string) {
   return sql`COALESCE(${events.endDate}, ${events.eventDate}) < ${today}`
 }
 
+// The same rule as `alreadyEnded`, for a row already loaded into memory —
+// callers that have the event in hand (a detail page, a checkout guard) must
+// not re-derive "finished" by eye and drift from the SQL version.
+export function hasEnded(
+  event: { eventDate: string | null; endDate: string | null },
+  today: string = new Date().toISOString().slice(0, 10)
+): boolean {
+  const lastDay = event.endDate ?? event.eventDate
+  return lastDay !== null && lastDay < today
+}
+
 // ─── Order aggregates ────────────────────────────────────────────────────────
 
 // Comma-joined tier names for an order, cheapest first (e.g. "General, VIP").

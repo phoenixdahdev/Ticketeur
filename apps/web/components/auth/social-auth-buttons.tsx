@@ -1,5 +1,7 @@
 'use client'
 
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { InstagramIcon } from '@hugeicons/core-free-icons'
 import { toast } from 'sonner'
@@ -11,6 +13,9 @@ type SocialProvider = {
   label: string
   icon: React.ReactNode
   onClick?: () => void
+  // Providers without real credentials stay unclickable rather than failing
+  // mid-redirect.
+  disabled?: boolean
 }
 
 function GoogleGlyph({ className }: { className?: string }) {
@@ -47,59 +52,93 @@ function AppleGlyph({ className }: { className?: string }) {
   )
 }
 
-async function continueWithGoogle() {
-  const { error } = await authClient.signIn.social({
-    provider: 'google',
-    callbackURL: '/post-login',
-  })
-  if (error) {
-    toast.error('Google sign-in failed', {
-      description: error.message ?? 'Please try again.',
-    })
-  }
-}
-
 function notYetWired() {
   toast('Coming soon', {
     description: 'This provider is not wired up yet.',
   })
 }
 
-const PROVIDERS: SocialProvider[] = [
-  {
-    label: 'Continue with Google',
-    icon: <GoogleGlyph />,
-    onClick: continueWithGoogle,
-  },
-  {
-    label: 'Continue with Instagram',
-    icon: (
-      <HugeiconsIcon
-        icon={InstagramIcon}
-        className="size-5 text-[#d62976]"
-        strokeWidth={1.8}
-      />
-    ),
-    onClick: notYetWired,
-  },
-  {
-    label: 'Continue with Apple',
-    icon: <AppleGlyph className="text-foreground" />,
-    onClick: notYetWired,
-  },
-]
-
 export function SocialAuthButtons() {
+  const router = useRouter()
+  const [pending, setPending] = useState(false)
+
+  async function continueWithGoogle() {
+    setPending(true)
+    // Popup sign-in: the OAuth round trip happens in a popup on our own
+    // origin, so the session cookie it sets is the one this page reads. The
+    // opener is never navigated by better-auth, so we route it ourselves.
+    const { error } = await authClient.signIn.popup({
+      provider: 'google',
+      callbackURL: '/post-login',
+      newUserCallbackURL: '/welcome',
+    })
+    setPending(false)
+
+    if (!error) {
+      // /post-login resolves the destination server-side, including sending a
+      // first-time social user to pick a role.
+      router.refresh()
+      router.push('/post-login')
+      return
+    }
+
+    // Dismissing the popup is a deliberate action, not an error worth a toast.
+    if (error.code === 'POPUP_CLOSED') return
+
+    if (error.code === 'POPUP_BLOCKED') {
+      // Blocked popups are common enough that failing here would just dead-end
+      // the user — fall back to the full-page redirect flow, where better-auth
+      // handles the new-user destination itself.
+      await authClient.signIn.social({
+        provider: 'google',
+        callbackURL: '/post-login',
+        newUserCallbackURL: '/welcome',
+      })
+      return
+    }
+
+    toast.error('Google sign-in failed', {
+      description: error.message ?? 'Please try again.',
+    })
+  }
+
+  const providers: SocialProvider[] = [
+    {
+      label: 'Continue with Google',
+      icon: <GoogleGlyph />,
+      onClick: () => void continueWithGoogle(),
+      disabled: pending,
+    },
+    {
+      label: 'Continue with Instagram',
+      icon: (
+        <HugeiconsIcon
+          icon={InstagramIcon}
+          className="size-5 text-[#d62976]"
+          strokeWidth={1.8}
+        />
+      ),
+      onClick: notYetWired,
+      disabled: true,
+    },
+    {
+      label: 'Continue with Apple',
+      icon: <AppleGlyph className="text-foreground" />,
+      onClick: notYetWired,
+      disabled: true,
+    },
+  ]
+
   return (
     <div className="flex items-center justify-center gap-4">
-      {PROVIDERS.map((p) => (
+      {providers.map((p) => (
         <button
           key={p.label}
           type="button"
           onClick={p.onClick}
           aria-label={p.label}
-          disabled
-          className="border-border/70 bg-background hover:border-primary/60 hover:bg-muted/40 flex size-11 items-center justify-center rounded-full border transition-colors disabled:cursor-not-allowed"
+          disabled={p.disabled}
+          className="border-border/70 bg-background hover:border-primary/60 hover:bg-muted/40 flex size-11 items-center justify-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50"
         >
           {p.icon}
         </button>

@@ -15,6 +15,7 @@ import {
   type MintTicket,
 } from '../../lib/orders'
 import { calculateFeeMinor } from '../../lib/fees'
+import { hasEnded } from '../../lib/predicates'
 import { validateVoucher } from '../../lib/vouchers'
 
 const MAX_TICKETS_PER_ORDER = 50
@@ -116,6 +117,16 @@ export const publicCheckoutRouter = createTRPCRouter({
     }
     if (event.status !== 'upcoming') {
       throw new TRPCError({ code: 'BAD_REQUEST', message: 'Event is not on sale' })
+    }
+    // A finished event keeps status 'upcoming' — nothing sweeps the table to
+    // retire events, so the status check above does not cover it. Without this,
+    // a stale page or a direct API call can still buy tickets for an event that
+    // ended months ago.
+    if (hasEnded(event)) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'This event has already ended.',
+      })
     }
 
     const tierIds = [...mergedQty.keys()]

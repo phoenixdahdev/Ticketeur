@@ -1,6 +1,6 @@
 import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
-import { admin, twoFactor, emailOTP } from 'better-auth/plugins'
+import { admin, twoFactor, emailOTP, oauthPopup } from 'better-auth/plugins'
 import {
   dispatchPasswordReset,
   dispatchTwoFactorOtp,
@@ -90,6 +90,7 @@ export function createAuth(cookiePrefix: string) {
         defaultRole: 'attendee',
         adminRoles: ['admin'],
       }),
+      oauthPopup(),
     ],
 
     user: {

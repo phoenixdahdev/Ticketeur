@@ -34,6 +34,11 @@ import {
   type DiscrepancyInput,
 } from './payment-discrepancies'
 import { generateAndStoreTicketsPdf, ticketUrl } from './tickets-pdf'
+import {
+  creditVotePurchase,
+  type VoteCreditFailure,
+  type VotePurchaseCredit,
+} from './votes'
 
 // Re-exported so callers get the whole order/fulfillment surface from one
 // module (the PDF helpers live in tickets-pdf for import-cycle reasons).
@@ -50,8 +55,9 @@ export class TicketStockError extends Error {
 }
 
 // A verified charge pays for the order, but fulfillOrder can't deliver what
-// the order is for: a type with no fulfilment yet (vendor_fee,
-// vote_purchase), or a registration fee whose submission can't be found.
+// the order is for: a type with no fulfilment yet (vendor_fee), a
+// registration fee whose submission can't be found, or a vote purchase whose
+// contest can't be found.
 // Thrown out of fulfillOrder's transaction, so nothing is written and the
 // order stays as it was for a person to settle. Every caller already treats
 // a throw that way: the webhook refuses the call, the return page shows the
@@ -60,7 +66,8 @@ export class OrderNotFulfillableError extends Error {
   constructor(
     public readonly orderId: string,
     public readonly orderType: string,
-    public readonly reason: 'unsupported_type' | RegistrationCreditFailure
+    public readonly reason:
+      'unsupported_type' | RegistrationCreditFailure | VoteCreditFailure
   ) {
     super(`Order ${orderId} (${orderType}) cannot be fulfilled: ${reason}`)
     this.name = 'OrderNotFulfillableError'
@@ -226,6 +233,7 @@ type OrderRow = typeof orders.$inferSelect
 export type FulfilmentCredit =
   | { kind: 'tickets' }
   | ({ kind: 'registration' } & RegistrationCredit)
+  | ({ kind: 'votes' } & VotePurchaseCredit)
 
 export type FulfillOrderResult =
   | {
@@ -322,10 +330,11 @@ function discrepancyFacts(
 // What is delivered depends on the order's type, read from the same locked
 // row, and is decided only after the check (deliverOrder): a 'ticket' order
 // bumps tier.sold and mints its tickets, a 'registration_fee' order completes
-// its submission. 'vendor_fee' and 'vote_purchase' have no fulfilment yet and
-// are refused with OrderNotFulfillableError, never minted as tickets. The
-// check runs for every type because it comes first, and no per-type step is
-// exported or called from anywhere else.
+// its submission, a 'vote_purchase' order grants its buyer vote credits for
+// the contest. 'vendor_fee' has no fulfilment yet and is refused with
+// OrderNotFulfillableError, never minted as tickets. The check runs for every
+// type because it comes first, and no per-type step is exported or called
+// from anywhere else.
 //
 // Returns `justFulfilled: true` only when this call did the pending→paid
 // transition. Side-effect callers (email, PDF) should gate on that flag so
@@ -628,11 +637,21 @@ async function deliverOrder(
       return { kind: 'registration', ...result.credit }
     }
 
-    // Not built yet. These must never fall through to minting tickets that
-    // were never bought: refused, and left for a person, until each has its
+    case 'vote_purchase': {
+      // Grants the buyer a vote-credit BALANCE for the contest named in
+      // `referenceId`; `quantity` is the number of votes, snapshotted at
+      // checkout. Safe to reach twice: the pending→paid transition this
+      // transaction performs is the once-only token, and grantVoteCredits
+      // re-checks it under the same row lock (see lib/votes.ts).
+      const result = await creditVotePurchase(tx, order)
+      if (!result.ok) throw refuse(result.reason)
+      return { kind: 'votes', ...result.credit }
+    }
+
+    // Not built yet. This must never fall through to minting tickets that
+    // were never bought: refused, and left for a person, until it has its
     // own case here.
     case 'vendor_fee':
-    case 'vote_purchase':
       throw refuse('unsupported_type')
 
     default: {
@@ -714,7 +733,8 @@ async function mintTicketsForOrder(
 
 /**
  * The side effects of a fulfilment, for every order type: the ticket PDF and
- * email for a ticket order, the confirmation email for a registration fee.
+ * email for a ticket order, the confirmation email for a registration fee,
+ * nothing (yet) for a vote purchase.
  * The FW webhook, the /checkout/return page and the reconciliation job each
  * call this with fulfillOrder's result. It does nothing unless that call did
  * the pending→paid transition (`justFulfilled`), so when they race, the
@@ -736,6 +756,12 @@ export async function notifyFulfilment(
       if (credit.completed) {
         await sendSubmissionConfirmation(credit.submissionId, { baseUrl })
       }
+      return
+    case 'votes':
+      // Nothing to send yet. The credits are spendable the moment this
+      // commits and the voter is on the /checkout/return page; the receipt
+      // email belongs with the rest of the voting emails, which this change
+      // deliberately does not touch.
       return
   }
 }

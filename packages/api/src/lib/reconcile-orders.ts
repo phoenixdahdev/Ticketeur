@@ -10,11 +10,12 @@
 // justFulfilled guard on the email. This job only ever fails an order with a
 // conditional update on status = 'pending'.
 //
-// Covers the order types fulfillOrder can fulfil: 'ticket' and
-// 'registration_fee'. 'vendor_fee' and 'vote_purchase' join once they have
-// fulfilment of their own. A registration fee that ends unpaid (every attempt
+// Covers the order types fulfillOrder can fulfil: 'ticket',
+// 'registration_fee' and 'vote_purchase'. 'vendor_fee' joins once it has
+// fulfilment of its own. A registration fee that ends unpaid (every attempt
 // failed, or still unpaid when it leaves the window) also gives back the spot
-// its submission holds; see expireUnpaidRegistrations.
+// its submission holds; see expireUnpaidRegistrations. A vote purchase holds
+// nothing, so an unpaid one just ages out of the window.
 
 import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm'
 
@@ -380,9 +381,13 @@ export async function reconcilePendingOrders({
     .where(
       and(
         eq(orders.status, 'pending'),
-        // The types fulfillOrder can fulfil. vendor_fee and vote_purchase
-        // need fulfilment of their own before this job may settle them.
-        inArray(orders.type, ['ticket', 'registration_fee']),
+        // The types fulfillOrder can fulfil. vendor_fee needs fulfilment of
+        // its own before this job may settle it. vote_purchase is here
+        // because a voter whose webhook never arrived would otherwise be
+        // charged and credited nothing, with nothing left to retry;
+        // grantVoteCredits is idempotent against this job re-presenting the
+        // same charge (see lib/votes.ts).
+        inArray(orders.type, ['ticket', 'registration_fee', 'vote_purchase']),
         isNotNull(orders.flwTxRef),
         // Measured on the database clock, which stamped created_at.
         sql`${orders.createdAt} <= now() - interval '10 minutes'`,

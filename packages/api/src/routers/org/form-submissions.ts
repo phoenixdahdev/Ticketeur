@@ -5,13 +5,20 @@ import { z } from 'zod'
 import { formFields, formPriceOptions, submissions, user } from '@ticketur/db'
 
 import { createTRPCRouter, organizerProcedure } from '../../trpc'
+import { getBaseUrl } from '../../lib/base-url'
 import {
   findSubmission,
   managesEvent,
   requireOwnedForm,
   requireOwnedSubmission,
 } from '../../lib/form-access'
+import { findActiveSubmission } from '../../lib/form-applicants'
+import {
+  sendSubmissionApproved,
+  sendSubmissionRejected,
+} from '../../lib/form-emails'
 import { buildSubmissionExport } from '../../lib/form-fields'
+import { feeOutstanding } from '../../lib/form-payments'
 import { claimFormSpot, FormSpotError, releaseFormSpot } from '../../lib/forms'
 
 const statusFilter = z.enum([
@@ -262,7 +269,8 @@ export const orgFormSubmissionsRouter = createTRPCRouter({
 
   // submitted → approved, or rejected → approved (which takes a spot back,
   // under the same capacity guard as intake). Approving an approved
-  // submission is a no-op reported as `changed: false`.
+  // submission is a no-op reported as `changed: false`. The applicant is
+  // emailed when it changes.
   approve: organizerProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
@@ -277,6 +285,8 @@ export const orgFormSubmissionsRouter = createTRPCRouter({
             status: submissions.status,
             formId: submissions.formId,
             priceOptionId: submissions.priceOptionId,
+            orderId: submissions.orderId,
+            applicantId: submissions.applicantId,
           })
           .from(submissions)
           .where(eq(submissions.id, submission.id))
@@ -292,6 +302,17 @@ export const orgFormSubmissionsRouter = createTRPCRouter({
         }
 
         if (current.status === 'rejected') {
+          // Rejected because its fee was never paid (lib/form-payments.ts
+          // releases those): approving would waive the fee. If it is paid
+          // late, fulfilment completes it without anyone approving.
+          if (await feeOutstanding(tx, current.orderId)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message:
+                "This applicant never paid the fee, so their application can't be approved. They can apply again.",
+            })
+          }
+
           // Rejecting gave the spot back, so approving must take one again.
           // No `openAt`: an organizer may approve after the form has closed.
           try {
@@ -311,6 +332,23 @@ export const orgFormSubmissionsRouter = createTRPCRouter({
             }
             throw err
           }
+
+          // One active submission per applicant (lib/form-applicants.ts):
+          // someone rejected may have applied again since. Checked holding
+          // the form row lock the claim just took, as intake does.
+          if (current.applicantId) {
+            const other = await findActiveSubmission(tx, {
+              formId: current.formId,
+              applicantId: current.applicantId,
+              exceptId: submission.id,
+            })
+            if (other) {
+              throw new TRPCError({
+                code: 'CONFLICT',
+                message: `This applicant has another application on this form (${other.reference}). Reject that one before approving this one.`,
+              })
+            }
+          }
         }
 
         const now = new Date()
@@ -327,17 +365,18 @@ export const orgFormSubmissionsRouter = createTRPCRouter({
         return true
       })
 
-      // NOTIFY SEAM: tell the applicant they were accepted (applicantEmail,
-      // reference). No email task exists for forms yet; add one in
-      // packages/jobs and trigger it here, outside the transaction, when
-      // `changed` is true.
+      // Outside the transaction, once the approval has committed.
+      if (changed) {
+        await sendSubmissionApproved(submission.id, { baseUrl: getBaseUrl() })
+      }
 
       return { id: submission.id, status: 'approved' as const, changed }
     }),
 
   // submitted or approved → rejected, with a reason for the applicant. The
   // submission's spot is released for someone else. Rejecting a rejected
-  // submission is a no-op reported as `changed: false`.
+  // submission is a no-op reported as `changed: false`. The applicant is
+  // emailed the reason when it changes.
   reject: organizerProcedure
     .input(rejectInput)
     .mutation(async ({ ctx, input }) => {
@@ -384,8 +423,9 @@ export const orgFormSubmissionsRouter = createTRPCRouter({
 
       // PAID PATH SEAM: rejecting a submission whose fee was paid (orderId
       // set) may owe the applicant a refund. Nothing is refunded here.
-      // NOTIFY SEAM: tell the applicant, with the reason. As for approve, no
-      // email task exists yet.
+
+      // Outside the transaction, once the rejection has committed.
+      if (changed) await sendSubmissionRejected(submission.id)
 
       return { id: submission.id, status: 'rejected' as const, changed }
     }),

@@ -5,13 +5,30 @@ import { z } from 'zod'
 import type { Database, SubmissionStatus } from '@ticketur/db'
 import { events, formFields, formPriceOptions, forms, user } from '@ticketur/db'
 
-import { createTRPCRouter, publicProcedure } from '../../trpc'
+import {
+  createTRPCRouter,
+  protectedProcedure,
+  publicProcedure,
+} from '../../trpc'
+import { getBaseUrl } from '../../lib/base-url'
+import { createPayment } from '../../lib/flutterwave'
 import { notCurrentlyBanned } from '../../lib/predicates'
+import {
+  blockFor,
+  findActiveSubmission,
+  makeWayForApplication,
+  type ApplicationBlock,
+} from '../../lib/form-applicants'
+import { sendSubmissionConfirmation } from '../../lib/form-emails'
 import {
   describeAnswerErrors,
   effectiveRules,
   validateAnswers,
 } from '../../lib/form-fields'
+import {
+  createRegistrationOrder,
+  releaseUnpaidSubmission,
+} from '../../lib/form-payments'
 import {
   claimFormSpot,
   completedStatus,
@@ -21,17 +38,16 @@ import {
   optionRemaining,
   type FormUnavailableReason,
 } from '../../lib/forms'
+import { PAYMENT_CURRENCY, toFlutterwaveAmount } from '../../lib/payment-amount'
 
 // A form holds at most 100 fields; this only turns away an oversized payload
 // before any work is done.
 const MAX_ANSWER_KEYS = 200
 
+// The applicant's name and email are not part of the input: they come from
+// the signed-in account (see submit).
 const submitInput = z.object({
   formId: z.string(),
-  // Collected on every form, whatever fields the organizer added: the
-  // confirmation email (with the reference) goes to this address.
-  applicantName: z.string().trim().min(1, 'Name required').max(120),
-  applicantEmail: z.email('Enter a valid email').max(254),
   // Required when the form has price options; must be absent when it has
   // none.
   priceOptionId: z.string().nullable().default(null),
@@ -63,6 +79,17 @@ function spotFailureMessage(err: FormSpotError): string {
     default:
       return UNAVAILABLE_MESSAGES.closed
   }
+}
+
+// One active submission per applicant per form (lib/form-applicants.ts).
+function applicationBlocked(block: ApplicationBlock): TRPCError {
+  return new TRPCError({
+    code: 'CONFLICT',
+    message:
+      block.kind === 'payment_open'
+        ? 'You started an application for this form a moment ago and its payment is still open. Finish paying in the payment window, or try again in a minute to start a new application.'
+        : `You've already applied to this form (reference ${block.reference}).`,
+  })
 }
 
 // A form is public only while published or closed, and only while its event
@@ -187,15 +214,30 @@ export const publicFormsRouter = createTRPCRouter({
       }
     }),
 
+  // Signed-in only: viewing a form (bySlug) needs no account, applying does.
+  //
   // Validates every answer against the stored field definitions, takes a
   // spot under the capacity guard and records the submission, all in one
   // transaction. Free: lands as 'submitted', or 'approved' on an auto-review
-  // form. A fee: lands as 'pending_payment', holding its spot, for the paid
-  // path to take over (see the seams below).
-  submit: publicProcedure
+  // form, and the confirmation email goes out. A fee: lands as
+  // 'pending_payment', holding its spot, with a registration_fee order for
+  // the option's price; the response carries the Flutterwave link, and
+  // fulfilment completes the submission (and sends the confirmation) once a
+  // verified charge pays for it.
+  //
+  // One active submission per applicant per form (lib/form-applicants.ts).
+  submit: protectedProcedure
     .input(submitInput)
     .mutation(async ({ ctx, input }) => {
       const now = new Date()
+      // The verified identity, stored on the submission as a snapshot. Sign-in
+      // requires a verified email (packages/auth), so the confirmation and
+      // the payment receipt go to an address the applicant has proved.
+      const applicant = {
+        id: ctx.session.user.id,
+        name: ctx.session.user.name,
+        email: ctx.session.user.email,
+      }
 
       const found = await loadPublicForm(ctx.db, eq(forms.id, input.formId))
       if (!found) {
@@ -240,11 +282,24 @@ export const publicFormsRouter = createTRPCRouter({
         })
       }
 
-      const feeMinor = option?.priceMinor ?? 0
+      // What the applicant is charged, in minor units: the chosen option's
+      // price exactly, with no service fee (see createRegistrationOrder). 0 on
+      // a free form or a free option.
+      const priceMinor = option?.priceMinor ?? 0
       const status: Exclude<SubmissionStatus, 'rejected'> =
-        feeMinor > 0 ? 'pending_payment' : completedStatus(form.reviewMode)
+        priceMinor > 0 ? 'pending_payment' : completedStatus(form.reviewMode)
 
       const created = await ctx.db.transaction(async (tx) => {
+        // Before the spot claim, which locks the form row: this locks the
+        // applicant's existing submissions on the form, and every path takes
+        // submission rows before the form row. Refuses a second application,
+        // or makes way by releasing a stale unpaid one.
+        const block = await makeWayForApplication(tx, {
+          formId: form.id,
+          applicantId: applicant.id,
+        })
+        if (block) throw applicationBlocked(block)
+
         try {
           await claimFormSpot(tx, {
             formId: form.id,
@@ -260,6 +315,16 @@ export const publicFormsRouter = createTRPCRouter({
           }
           throw err
         }
+
+        // The race check. The claim holds the form row lock, which every
+        // submit to this form takes, so a concurrent submit from the same
+        // applicant has either committed (and shows up here) or is queued
+        // behind us (and will see this one). The rollback hands our spot back.
+        const raced = await findActiveSubmission(tx, {
+          formId: form.id,
+          applicantId: applicant.id,
+        })
+        if (raced) throw applicationBlocked(blockFor(raced))
 
         // Read only now: the claim holds the form row lock, and every field
         // edit takes that lock first, so these are exactly the definitions
@@ -281,36 +346,92 @@ export const publicFormsRouter = createTRPCRouter({
         const inserted = await insertSubmission(tx, {
           formId: form.id,
           priceOptionId: option?.id ?? null,
-          applicantId: ctx.session?.user.id ?? null,
-          applicantName: input.applicantName,
-          applicantEmail: input.applicantEmail,
+          applicantId: applicant.id,
+          applicantName: applicant.name,
+          applicantEmail: applicant.email,
           status,
           answersJson: checked.answers,
           // An auto-approved submission was decided on arrival, by no one.
           reviewedAt: status === 'approved' ? now : null,
         })
 
-        // ── PAID PATH SEAM (inside the transaction) ────────────────────────
-        // When status === 'pending_payment', create the order for `feeMinor`
-        // here so it commits or rolls back with the submission and its spot,
-        // and set submissions.orderId to it. On payment, the fulfilment step
-        // moves the submission to completedStatus(form.reviewMode), and sets
-        // reviewedAt when that is 'approved'. If the payment fails or is
-        // abandoned, it must call releaseFormSpot, or the spot stays held.
-        // Nothing here charges anyone yet: a paid submission is recorded as
-        // pending_payment with no order.
+        // The paid path: the order is created here so it commits or rolls
+        // back with the submission and its spot.
+        const payment =
+          status === 'pending_payment'
+            ? await createRegistrationOrder(tx, {
+                submissionId: inserted.id,
+                eventId: event.id,
+                amountMinor: priceMinor,
+                applicant,
+              })
+            : null
 
-        return inserted
+        return { ...inserted, payment }
       })
 
-      // ── PAID PATH SEAM (after commit) ──────────────────────────────────────
-      // When status === 'pending_payment', create the payment link here, as
-      // checkout.start does after its own transaction, and return it as
-      // `paymentUrl`.
-
-      // NOTIFY SEAM: send the confirmation email carrying `reference` to
-      // input.applicantEmail for a 'submitted' or 'approved' submission. No
-      // email task exists for forms yet; add one in packages/jobs.
+      const { payment } = created
+      let paymentUrl: string | null = null
+      if (payment) {
+        // After commit, as checkout.start does: hand off to Flutterwave.
+        const baseUrl = getBaseUrl()
+        try {
+          const { link } = await createPayment({
+            txRef: payment.txRef,
+            // Whole naira, through the helper fulfilment verifies the charge
+            // against, so what we ask for and what we accept can't drift.
+            amount: toFlutterwaveAmount(priceMinor),
+            currency: PAYMENT_CURRENCY,
+            redirectUrl: `${baseUrl}/checkout/return`,
+            customer: { email: applicant.email, name: applicant.name },
+            meta: {
+              orderId: payment.orderId,
+              submissionId: created.id,
+              formId: form.id,
+              eventId: event.id,
+            },
+            customizations: {
+              title: event.title,
+              description: option ? `${form.title}: ${option.name}` : form.title,
+            },
+          })
+          paymentUrl = link
+        } catch (err) {
+          // No link reached the applicant, so nothing can be paid on this
+          // order. Give the spot back now rather than holding it until the
+          // order ages out, which also lets them apply again straight away.
+          console.error('[forms] could not start the registration payment', {
+            submissionId: created.id,
+            orderId: payment.orderId,
+            error: err,
+          })
+          try {
+            await ctx.db.transaction((tx) =>
+              releaseUnpaidSubmission(
+                tx,
+                { orderId: payment.orderId },
+                'not_started'
+              )
+            )
+          } catch (releaseErr) {
+            // The spot stays held until the reconciliation job expires it.
+            console.error('[forms] could not release an unstarted payment', {
+              submissionId: created.id,
+              orderId: payment.orderId,
+              error: releaseErr,
+            })
+          }
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message:
+              "We couldn't start the payment, so your application wasn't submitted. Please try again.",
+          })
+        }
+      } else {
+        // Complete already, so it is confirmed now. A paid submission is
+        // confirmed by fulfilment once its fee clears, not here.
+        await sendSubmissionConfirmation(created.id, { baseUrl: getBaseUrl() })
+      }
 
       return {
         submissionId: created.id,
@@ -318,10 +439,10 @@ export const publicFormsRouter = createTRPCRouter({
         status,
         // True while the chosen option's fee is unpaid.
         requiresPayment: status === 'pending_payment',
-        // What the chosen option costs, in minor units; 0 on a free form.
-        amountMinor: feeMinor,
-        // Filled in by the paid path; always null until then.
-        paymentUrl: null as string | null,
+        // What the applicant is charged, in minor units; 0 when free.
+        amountMinor: priceMinor,
+        // The Flutterwave checkout link when there is a fee; null otherwise.
+        paymentUrl,
       }
     }),
 })

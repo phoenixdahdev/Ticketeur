@@ -2,6 +2,7 @@ import { TRPCError } from '@trpc/server'
 import { and, asc, desc, eq, inArray, lte, notExists, sql } from 'drizzle-orm'
 import { z } from 'zod'
 
+import type { Database, FormStatus } from '@ticketur/db'
 import {
   events,
   formFields,
@@ -23,6 +24,11 @@ import {
   formAvailability,
   generateUniqueFormSlug,
 } from '../../lib/forms'
+import {
+  lockFormForEdit,
+  recordContentChange,
+  unchangedReview,
+} from '../../lib/form-review'
 
 import { orgFormFieldsRouter } from './form-fields'
 import { orgFormPriceOptionsRouter } from './form-price-options'
@@ -79,6 +85,73 @@ const countColumns = {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
+// ─── Review ────────────────────────────────────────────────────────────────
+
+// Where an organizer can send a form to the admin queue from: a draft, a
+// rejected form once fixed, or a closed one being reopened with changes.
+const SUBMITTABLE: FormStatus[] = ['draft', 'rejected', 'closed']
+
+function assertSubmittable(status: FormStatus): void {
+  if (status === 'pending_review') {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'This form is already waiting for review.',
+    })
+  }
+  if (status === 'published') {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'This form is already live.',
+    })
+  }
+}
+
+// Whether a form's content is still exactly what an admin last approved.
+function approvedAsIs(form: {
+  contentRevision: number
+  approvedRevision: number | null
+}): boolean {
+  return (
+    form.approvedRevision !== null &&
+    form.approvedRevision === form.contentRevision
+  )
+}
+
+function changedSinceApproval(): TRPCError {
+  return new TRPCError({
+    code: 'BAD_REQUEST',
+    message:
+      'This form has changed since it was approved. Submit it for review to reopen it.',
+  })
+}
+
+// The preconditions publishing always had, now checked on submit and reopen.
+function assertClosingTimeAhead(closesAt: Date | null, action: string): void {
+  if (closesAt && closesAt <= new Date()) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: `The closing time has already passed. Move it later or clear it before ${action}.`,
+    })
+  }
+}
+
+async function assertHasFields(
+  db: Database,
+  formId: string,
+  action: string
+): Promise<void> {
+  const [fieldCount] = await db
+    .select({ count: sql<number>`COUNT(*)::int` })
+    .from(formFields)
+    .where(eq(formFields.formId, formId))
+  if ((fieldCount?.count ?? 0) === 0) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: `Add at least one field before ${action}.`,
+    })
+  }
+}
+
 export const orgFormsRouter = createTRPCRouter({
   // ─── Queries ──────────────────────────────────────────────────────────────
 
@@ -106,6 +179,11 @@ export const orgFormsRouter = createTRPCRouter({
           capacity: forms.capacity,
           claimed: forms.claimed,
           reviewMode: forms.reviewMode,
+          // Set while rejected (and kept through resubmission), so the list
+          // can say why.
+          rejectionReason: forms.rejectionReason,
+          reviewRequestedAt: forms.reviewRequestedAt,
+          reviewedAt: forms.reviewedAt,
           createdAt: forms.createdAt,
           updatedAt: forms.updatedAt,
           ...countColumns,
@@ -170,6 +248,9 @@ export const orgFormsRouter = createTRPCRouter({
           form.status === 'published'
             ? formAvailability(form, event, priceOptions)
             : null,
+        // Whether reopen will take this closed form straight back to
+        // published; when false, a closed form reopens through submit.
+        canReopen: form.status === 'closed' && approvedAsIs(form),
       }
     }),
 
@@ -203,9 +284,12 @@ export const orgFormsRouter = createTRPCRouter({
       return { id, slug }
     }),
 
-  // Settings only: status changes go through publish/close, and the slug
-  // never changes (a shared link must keep working). A change of reviewMode
-  // applies to new submissions; ones already submitted stay as they are.
+  // Settings and wording only: status changes go through submit, reopen and
+  // close, and the slug never changes (a shared link must keep working). A
+  // change of reviewMode applies to new submissions; ones already submitted
+  // stay as they are. The title and description are what applicants read
+  // above the questions, so an admin reviews them: changing either on a live
+  // form sends it back to review. The other settings are operational.
   update: organizerProcedure
     .input(updateInput)
     .mutation(async ({ ctx, input }) => {
@@ -217,84 +301,151 @@ export const orgFormsRouter = createTRPCRouter({
       const capacityGuard =
         input.capacity === null ? undefined : lte(forms.claimed, input.capacity)
 
+      const review = await ctx.db.transaction(async (tx) => {
+        const locked = await lockFormForEdit(tx, form.id)
+        const wordingChanged =
+          input.title !== locked.title ||
+          input.description !== locked.description
+
+        // A closed form's page stays public, showing its title and
+        // description, and closing doesn't send a form to review. So its
+        // wording is frozen: changing it goes through submit, which hides the
+        // form until an admin approves the new version.
+        if (wordingChanged && locked.status === 'closed') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message:
+              "A closed form's page is still public, so its title and description can't change without a review. Submit it for review to change them.",
+          })
+        }
+
+        const updated = await tx
+          .update(forms)
+          .set({
+            type: input.type,
+            title: input.title,
+            description: input.description,
+            opensAt: input.opensAt,
+            closesAt: input.closesAt,
+            capacity: input.capacity,
+            reviewMode: input.reviewMode,
+            updatedAt: new Date(),
+          })
+          .where(and(eq(forms.id, form.id), capacityGuard))
+          .returning({ id: forms.id })
+
+        if (updated.length === 0) {
+          const [current] = await tx
+            .select({ claimed: forms.claimed })
+            .from(forms)
+            .where(eq(forms.id, form.id))
+            .limit(1)
+          if (!current) throw new TRPCError({ code: 'NOT_FOUND' })
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `This form already holds ${plural(current.claimed, 'submission')}; capacity can't be lower than that.`,
+          })
+        }
+
+        return wordingChanged
+          ? recordContentChange(tx, locked)
+          : unchangedReview(locked)
+      })
+
+      return { id: form.id, ...review }
+    }),
+
+  // Sends the form to the admin review queue: a draft, a rejected form once
+  // fixed, or a closed form being reopened with changes. An organizer can't
+  // publish. The questions are theirs to write, so a form goes live only when
+  // an admin approves it (see lib/form-review.ts).
+  submit: organizerProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { form, event } = await requireOwnedForm(ctx, input.id)
+      assertSubmittable(form.status)
+      assertEventAcceptsForms(event)
+      assertClosingTimeAhead(form.closesAt, 'submitting it')
+      await assertHasFields(ctx.db, form.id, 'submitting it')
+
+      // Conditional on the status, so two concurrent submits make one
+      // transition between them.
+      const now = new Date()
       const updated = await ctx.db
         .update(forms)
         .set({
-          type: input.type,
-          title: input.title,
-          description: input.description,
-          opensAt: input.opensAt,
-          closesAt: input.closesAt,
-          capacity: input.capacity,
-          reviewMode: input.reviewMode,
-          updatedAt: new Date(),
+          status: 'pending_review',
+          reviewRequestedAt: now,
+          updatedAt: now,
         })
-        .where(and(eq(forms.id, form.id), capacityGuard))
+        .where(and(eq(forms.id, form.id), inArray(forms.status, SUBMITTABLE)))
         .returning({ id: forms.id })
-
       if (updated.length === 0) {
         const [current] = await ctx.db
-          .select({ claimed: forms.claimed })
+          .select({ status: forms.status })
           .from(forms)
           .where(eq(forms.id, form.id))
           .limit(1)
         if (!current) throw new TRPCError({ code: 'NOT_FOUND' })
+        assertSubmittable(current.status)
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: `This form already holds ${plural(current.claimed, 'submission')}; capacity can't be lower than that.`,
+          message: 'This form changed while it was being submitted. Try again.',
         })
       }
 
-      return { id: form.id }
+      return { id: form.id, status: 'pending_review' as const }
     }),
 
-  // From draft, or from closed to reopen it. Unlike an event, a form needs
-  // no admin review: it is only reachable while its event is live, and the
-  // event itself was reviewed.
-  publish: organizerProcedure
+  // Takes a closed form straight back to published, but only while its
+  // content is still the revision an admin approved: reopening never puts an
+  // unreviewed question live. A form edited since it closed reopens through
+  // submit instead. (A form published before reviews existed has no approved
+  // revision, so it goes through submit too.)
+  reopen: organizerProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const { form, event } = await requireOwnedForm(ctx, input.id)
-      if (form.status === 'published') {
+      if (form.status !== 'closed') {
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: 'This form is already published.',
+          message: 'Only a closed form can be reopened.',
         })
       }
+      if (!approvedAsIs(form)) throw changedSinceApproval()
       assertEventAcceptsForms(event)
-      if (form.closesAt && form.closesAt <= new Date()) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message:
-            'The closing time has already passed. Move it later or clear it before publishing.',
-        })
-      }
+      assertClosingTimeAhead(form.closesAt, 'reopening it')
+      await assertHasFields(ctx.db, form.id, 'reopening it')
 
-      const [fieldCount] = await ctx.db
-        .select({ count: sql<number>`COUNT(*)::int` })
-        .from(formFields)
-        .where(eq(formFields.formId, form.id))
-      if ((fieldCount?.count ?? 0) === 0) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Add at least one field before publishing.',
-        })
-      }
-
-      // Conditional on the status, so two concurrent publishes make one
-      // transition between them.
+      // The revision check sits in the UPDATE. Every content edit takes this
+      // row's lock and moves contentRevision on before it commits, so an edit
+      // racing the reopen either commits first (and this matches nothing) or
+      // finds the form published and sends it back to review.
       const updated = await ctx.db
         .update(forms)
         .set({ status: 'published', updatedAt: new Date() })
         .where(
-          and(eq(forms.id, form.id), inArray(forms.status, ['draft', 'closed']))
+          and(
+            eq(forms.id, form.id),
+            eq(forms.status, 'closed'),
+            eq(forms.approvedRevision, forms.contentRevision)
+          )
         )
         .returning({ id: forms.id })
       if (updated.length === 0) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'This form is already published.',
-        })
+        const [current] = await ctx.db
+          .select({ status: forms.status })
+          .from(forms)
+          .where(eq(forms.id, form.id))
+          .limit(1)
+        if (!current) throw new TRPCError({ code: 'NOT_FOUND' })
+        if (current.status !== 'closed') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Only a closed form can be reopened.',
+          })
+        }
+        throw changedSinceApproval()
       }
 
       return { id: form.id, status: 'published' as const }

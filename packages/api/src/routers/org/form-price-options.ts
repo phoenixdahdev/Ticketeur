@@ -10,7 +10,12 @@ import {
   requireOwnedForm,
   requireOwnedPriceOption,
 } from '../../lib/form-access'
-import { lockForm, MAX_PRICE_OPTIONS_PER_FORM } from '../../lib/forms'
+import { MAX_PRICE_OPTIONS_PER_FORM } from '../../lib/forms'
+import {
+  lockFormForEdit,
+  recordContentChange,
+  unchangedReview,
+} from '../../lib/form-review'
 
 // price_minor is an int4 column.
 const INT4_MAX = 2_147_483_647
@@ -33,6 +38,14 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 // A form with no options is free; adding the first one makes choosing an
 // option (and paying for it, when it has a price) part of submitting.
+//
+// What an applicant pays is part of what they agree to, so an admin reviews
+// the options: adding or deleting one, or changing its name or price, sends a
+// published form back to review in the same transaction (lib/form-review.ts),
+// reported in `sentToReview`. A quantity limit is capacity, and capacity is
+// operational, so changing only that doesn't. Every mutation takes the form
+// row lock first, before any option row, the order intake's spot claim locks
+// them in.
 export const orgFormPriceOptionsRouter = createTRPCRouter({
   // Appended after the last option.
   add: organizerProcedure
@@ -41,9 +54,9 @@ export const orgFormPriceOptionsRouter = createTRPCRouter({
       const { form } = await requireOwnedForm(ctx, input.formId)
       const id = newId('fopt')
 
-      await ctx.db.transaction(async (tx) => {
+      const review = await ctx.db.transaction(async (tx) => {
         // Serialises concurrent adds, so the count cap and sortOrder hold.
-        await lockForm(tx, form.id)
+        const locked = await lockFormForEdit(tx, form.id)
         const [existing] = await tx
           .select({
             count: sql<number>`COUNT(*)::int`,
@@ -65,9 +78,10 @@ export const orgFormPriceOptionsRouter = createTRPCRouter({
           quantityLimit: input.quantityLimit,
           sortOrder: (existing?.lastSort ?? -1) + 1,
         })
+        return recordContentChange(tx, locked)
       })
 
-      return { id }
+      return { id, ...review }
     }),
 
   // A new price applies to submissions from now on.
@@ -86,30 +100,49 @@ export const orgFormPriceOptionsRouter = createTRPCRouter({
           ? undefined
           : lte(formPriceOptions.claimed, input.quantityLimit)
 
-      const updated = await ctx.db
-        .update(formPriceOptions)
-        .set({
-          name: input.name,
-          priceMinor: input.priceMinor,
-          quantityLimit: input.quantityLimit,
-        })
-        .where(and(eq(formPriceOptions.id, option.id), limitGuard))
-        .returning({ id: formPriceOptions.id })
-
-      if (updated.length === 0) {
-        const [current] = await ctx.db
-          .select({ claimed: formPriceOptions.claimed })
+      const review = await ctx.db.transaction(async (tx) => {
+        const locked = await lockFormForEdit(tx, option.formId)
+        const [current] = await tx
+          .select({
+            name: formPriceOptions.name,
+            priceMinor: formPriceOptions.priceMinor,
+          })
           .from(formPriceOptions)
           .where(eq(formPriceOptions.id, option.id))
           .limit(1)
         if (!current) throw new TRPCError({ code: 'NOT_FOUND' })
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: `${plural(current.claimed, 'submission')} already hold "${option.name}"; its limit can't be lower than that.`,
-        })
-      }
 
-      return { id: option.id }
+        const updated = await tx
+          .update(formPriceOptions)
+          .set({
+            name: input.name,
+            priceMinor: input.priceMinor,
+            quantityLimit: input.quantityLimit,
+          })
+          .where(and(eq(formPriceOptions.id, option.id), limitGuard))
+          .returning({ id: formPriceOptions.id })
+
+        if (updated.length === 0) {
+          const [held] = await tx
+            .select({ claimed: formPriceOptions.claimed })
+            .from(formPriceOptions)
+            .where(eq(formPriceOptions.id, option.id))
+            .limit(1)
+          if (!held) throw new TRPCError({ code: 'NOT_FOUND' })
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `${plural(held.claimed, 'submission')} already hold "${option.name}"; its limit can't be lower than that.`,
+          })
+        }
+
+        const termsChanged =
+          input.name !== current.name || input.priceMinor !== current.priceMinor
+        return termsChanged
+          ? recordContentChange(tx, locked)
+          : unchangedReview(locked)
+      })
+
+      return { id: option.id, ...review }
     }),
 
   // An option any submission chose is part of that applicant's record (and
@@ -122,30 +155,34 @@ export const orgFormPriceOptionsRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const { option } = await requireOwnedPriceOption(ctx, input.id)
 
-      const deleted = await ctx.db
-        .delete(formPriceOptions)
-        .where(
-          and(
-            eq(formPriceOptions.id, option.id),
-            eq(formPriceOptions.claimed, 0),
-            notExists(
-              ctx.db
-                .select({ id: submissions.id })
-                .from(submissions)
-                .where(eq(submissions.priceOptionId, option.id))
+      const review = await ctx.db.transaction(async (tx) => {
+        const locked = await lockFormForEdit(tx, option.formId)
+        const deleted = await tx
+          .delete(formPriceOptions)
+          .where(
+            and(
+              eq(formPriceOptions.id, option.id),
+              eq(formPriceOptions.claimed, 0),
+              notExists(
+                tx
+                  .select({ id: submissions.id })
+                  .from(submissions)
+                  .where(eq(submissions.priceOptionId, option.id))
+              )
             )
           )
-        )
-        .returning({ id: formPriceOptions.id })
+          .returning({ id: formPriceOptions.id })
 
-      if (deleted.length === 0) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: `Submissions have chosen "${option.name}", so it can't be deleted.`,
-        })
-      }
+        if (deleted.length === 0) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `Submissions have chosen "${option.name}", so it can't be deleted.`,
+          })
+        }
+        return recordContentChange(tx, locked)
+      })
 
-      return { id: option.id }
+      return { id: option.id, ...review }
     }),
 })
 

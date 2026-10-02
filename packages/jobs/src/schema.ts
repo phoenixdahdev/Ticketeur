@@ -165,3 +165,26 @@ export const adminBroadcastSchema = z.object({
   body: z.string(),
 })
 export type AdminBroadcastPayload = z.infer<typeof adminBroadcastSchema>
+
+// Registration form review. An admin approved a form's questions (it now takes
+// submissions), or rejected them with a reason the organizer must address.
+export const formApprovedSchema = z.object({
+  email: z.email(),
+  organizerName: z.string(),
+  formTitle: z.string(),
+  eventTitle: z.string(),
+  publicUrl: z.url(),
+  manageUrl: z.url(),
+})
+export type FormApprovedPayload = z.infer<typeof formApprovedSchema>
+
+export const formRejectedSchema = z.object({
+  email: z.email(),
+  organizerName: z.string(),
+  formTitle: z.string(),
+  eventTitle: z.string(),
+  // Required: an admin can't reject a form without saying why.
+  reason: z.string().min(1),
+  manageUrl: z.url(),
+})
+export type FormRejectedPayload = z.infer<typeof formRejectedSchema>

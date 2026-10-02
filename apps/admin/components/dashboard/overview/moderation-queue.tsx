@@ -60,6 +60,9 @@ export function ModerationQueue() {
       queryKey: trpc.admin.moderation.flaggedActivities.queryKey(),
     })
     queryClient.invalidateQueries({
+      queryKey: trpc.admin.moderation.pendingForms.queryKey(),
+    })
+    queryClient.invalidateQueries({
       queryKey: trpc.admin.overview.stats.queryKey(),
     })
   }
@@ -116,6 +119,19 @@ export function ModerationQueue() {
     })
   )
 
+  const rejectFormMut = useMutation(
+    trpc.admin.moderation.rejectForm.mutationOptions({
+      onSuccess: () => {
+        toast.success('Form rejected', {
+          description: 'The organizer has been emailed the reason.',
+        })
+        invalidate()
+      },
+      onError: (e) =>
+        toast.error('Could not reject', { description: e.message }),
+    })
+  )
+
   const dismissFlagMut = useMutation(
     trpc.admin.moderation.dismissFlag.mutationOptions({
       onSuccess: () => {
@@ -132,13 +148,15 @@ export function ModerationQueue() {
     rejectVendorMut.isPending ||
     approveEventMut.isPending ||
     rejectEventMut.isPending ||
+    rejectFormMut.isPending ||
     dismissFlagMut.isPending
 
   const dialog = useActionDialog()
 
   async function handleApprove(item: QueueItem) {
     if (busy) return
-    if (item.kind === 'report') {
+    // A form is approved from its review page, after reading its questions.
+    if (item.kind === 'report' || item.kind === 'form') {
       router.push(item.href)
       return
     }
@@ -169,6 +187,22 @@ export function ModerationQueue() {
       })
       if (!ok) return
       dismissFlagMut.mutate({ id: item.id })
+      return
+    }
+    if (item.kind === 'form') {
+      const reason = await dialog.prompt({
+        title: `Reject "${item.title}"?`,
+        description:
+          'The form stays offline. The organizer is emailed this reason so they can fix the form and resubmit it.',
+        inputLabel: 'Reason',
+        placeholder:
+          'Which questions need to change before this can be approved?',
+        confirmLabel: 'Reject',
+        tone: 'danger',
+        required: true,
+      })
+      if (reason === null) return
+      rejectFormMut.mutate({ id: item.id, reason: reason.trim() })
       return
     }
     const reason = await dialog.prompt({
@@ -281,7 +315,13 @@ export function ModerationQueue() {
                   </ActionPill>
                   <ActionPill
                     tone="success"
-                    label={item.kind === 'report' ? 'Open' : 'Approve'}
+                    label={
+                      item.kind === 'report'
+                        ? 'Open'
+                        : item.kind === 'form'
+                          ? 'Review to approve'
+                          : 'Approve'
+                    }
                     disabled={busy || item.kind === 'report'}
                     onClick={() => handleApprove(item)}
                   >

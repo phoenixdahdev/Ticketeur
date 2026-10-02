@@ -14,6 +14,12 @@ import {
   toFieldColumns,
 } from '../../lib/form-fields'
 import { lockForm, type DbTransaction } from '../../lib/forms'
+import {
+  lockFormForEdit,
+  recordContentChange,
+  sameFieldContent,
+  unchangedReview,
+} from '../../lib/form-review'
 
 const addInput = z
   .object({ formId: z.string(), ...fieldDefinitionShape })
@@ -49,17 +55,23 @@ async function answeredCount(
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
-// Every mutation here runs under lockForm, the lock intake's spot claim also
-// takes, so a submission is never validated against a field list that is
-// halfway through changing, and concurrent edits apply one after another.
+// Every mutation here runs under the form row lock (lockFormForEdit, or
+// lockForm for reorder), the lock intake's spot claim also takes, so a
+// submission is never validated against a field list that is halfway through
+// changing, and concurrent edits apply one after another.
+//
+// Fields are the questions an admin approved, so adding, changing or deleting
+// one sends a published form back to review in the same transaction (see
+// lib/form-review.ts); each mutation reports that in `sentToReview`.
+// Reordering asks nothing new and leaves the review alone.
 export const orgFormFieldsRouter = createTRPCRouter({
   // Appended after the last field; reorder moves it.
   add: organizerProcedure.input(addInput).mutation(async ({ ctx, input }) => {
     const { form } = await requireOwnedForm(ctx, input.formId)
     const id = newId('ffld')
 
-    await ctx.db.transaction(async (tx) => {
-      await lockForm(tx, form.id)
+    const review = await ctx.db.transaction(async (tx) => {
+      const locked = await lockFormForEdit(tx, form.id)
       const [existing] = await tx
         .select({
           count: sql<number>`COUNT(*)::int`,
@@ -79,28 +91,32 @@ export const orgFormFieldsRouter = createTRPCRouter({
         position: (existing?.lastPosition ?? -1) + 1,
         ...toFieldColumns(input),
       })
+      return recordContentChange(tx, locked)
     })
 
-    return { id }
+    return { id, ...review }
   }),
 
-  // Takes the whole definition. Allowed on a live form: label, help text,
-  // required-ness and choices can change at any time (answers already given
-  // keep their stored value). Only the type is frozen once answered.
+  // Takes the whole definition. Allowed on a live form, though it then goes
+  // back to review: label, help text, required-ness and choices can change at
+  // any time (answers already given keep their stored value). Only the type
+  // is frozen once answered. Sending the definition the field already has
+  // changes nothing, so it doesn't take a live form offline.
   update: organizerProcedure
     .input(updateInput)
     .mutation(async ({ ctx, input }) => {
       const { field } = await requireOwnedField(ctx, input.id)
       const columns = toFieldColumns(input)
 
-      await ctx.db.transaction(async (tx) => {
-        await lockForm(tx, field.formId)
+      const review = await ctx.db.transaction(async (tx) => {
+        const locked = await lockFormForEdit(tx, field.formId)
         const [current] = await tx
-          .select({ type: formFields.type })
+          .select()
           .from(formFields)
           .where(eq(formFields.id, field.id))
           .limit(1)
         if (!current) throw new TRPCError({ code: 'NOT_FOUND' })
+        if (sameFieldContent(current, columns)) return unchangedReview(locked)
 
         // A new type would leave the answers already given in the old type's
         // shape: text where a number is now expected, one URL where a list
@@ -119,9 +135,10 @@ export const orgFormFieldsRouter = createTRPCRouter({
           .update(formFields)
           .set(columns)
           .where(eq(formFields.id, field.id))
+        return recordContentChange(tx, locked)
       })
 
-      return { id: field.id }
+      return { id: field.id, ...review }
     }),
 
   // Answers are applicants' records: deleting a field someone has answered
@@ -132,8 +149,8 @@ export const orgFormFieldsRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const { field } = await requireOwnedField(ctx, input.id)
 
-      await ctx.db.transaction(async (tx) => {
-        await lockForm(tx, field.formId)
+      const review = await ctx.db.transaction(async (tx) => {
+        const locked = await lockFormForEdit(tx, field.formId)
         const answered = await answeredCount(tx, field.formId, field.id)
         if (answered > 0) {
           throw new TRPCError({
@@ -142,15 +159,18 @@ export const orgFormFieldsRouter = createTRPCRouter({
           })
         }
         await tx.delete(formFields).where(eq(formFields.id, field.id))
+        return recordContentChange(tx, locked)
       })
 
-      return { id: field.id }
+      return { id: field.id, ...review }
     }),
 
   // One call, one UPDATE: positions become each field's index in `fieldIds`.
   // The list must name every field of the form exactly once; anything else
   // means the builder is looking at a stale list, and guessing where the
   // missing fields belong would reorder behind the organizer's back.
+  // Not a change to reviewed content: the same questions in another order
+  // can't ask anything new, so a live form stays live.
   reorder: organizerProcedure
     .input(reorderInput)
     .mutation(async ({ ctx, input }) => {

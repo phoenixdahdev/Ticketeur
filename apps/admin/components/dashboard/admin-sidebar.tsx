@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useRouter, usePathname } from 'next/navigation'
 import { motion } from 'motion/react'
+import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { HugeiconsIcon } from '@hugeicons/react'
 import type { IconSvgElement } from '@hugeicons/react'
@@ -14,6 +15,7 @@ import {
   Shield01Icon,
   CouponPercentIcon,
   Mail01Icon,
+  MoneyBag02Icon,
   Logout02Icon,
 } from '@hugeicons/core-free-icons'
 
@@ -27,6 +29,7 @@ import {
 } from '@ticketur/ui/components/avatar'
 
 import { authClient } from '@/lib/auth-client'
+import { useTRPC } from '@/lib/trpc'
 
 export type SidebarUser = {
   name: string
@@ -48,6 +51,9 @@ const NAV_LINKS: NavLink[] = [
   { href: '/vouchers', label: 'Vouchers', icon: CouponPercentIcon },
   { href: '/emails', label: 'Emails', icon: Mail01Icon },
   { href: '/moderation', label: 'Moderation', icon: Shield01Icon },
+  // Money the platform is holding that it may owe back. Carries a live count
+  // so an unrefunded charge is noticed from any page, not discovered.
+  { href: '/refunds', label: 'Refunds Owed', icon: MoneyBag02Icon },
 ]
 
 function getInitials(name: string) {
@@ -75,6 +81,11 @@ export function AdminSidebar({
 }) {
   const router = useRouter()
   const pathname = usePathname() ?? ''
+  const trpc = useTRPC()
+  const discrepancies = useQuery(
+    trpc.admin.paymentDiscrepancies.stats.queryOptions()
+  )
+  const owedCount = discrepancies.data?.open ?? 0
 
   async function handleSignOut() {
     onNavigate?.()
@@ -136,13 +147,21 @@ export function AdminSidebar({
                       }}
                     />
                   ) : null}
-                  <span className="relative flex items-center gap-3">
+                  <span className="relative flex flex-1 items-center gap-3">
                     <HugeiconsIcon
                       icon={link.icon}
                       className="size-5"
                       strokeWidth={1.8}
                     />
                     {link.label}
+                    {link.href === '/refunds' && owedCount > 0 ? (
+                      <span
+                        aria-label={`${owedCount} awaiting a refund`}
+                        className="bg-destructive text-destructive-foreground ml-auto inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold"
+                      >
+                        {owedCount > 99 ? '99+' : owedCount}
+                      </span>
+                    ) : null}
                   </span>
                 </Link>
               </li>

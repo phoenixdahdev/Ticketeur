@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server'
-import { and, asc, eq, ne, type SQL } from 'drizzle-orm'
+import { and, asc, eq, inArray, type SQL } from 'drizzle-orm'
 import { z } from 'zod'
 
 import type { Database, SubmissionStatus } from '@ticketur/db'
@@ -65,10 +65,15 @@ function spotFailureMessage(err: FormSpotError): string {
   }
 }
 
-// A form is public once past draft, and only while its event is: approved and
-// live (status 'upcoming', which also shuts out an admin-suspended event) and
-// run by an organizer who isn't banned. These are the public event page's
-// rules; a form can't be more visible than its event.
+// A form is public only while published or closed, and only while its event
+// is: approved and live (status 'upcoming', which also shuts out an
+// admin-suspended event) and run by an organizer who isn't banned. These are
+// the public event page's rules; a form can't be more visible than its event.
+//
+// An allow-list on purpose. Forms gain review states (awaiting admin approval,
+// rejected) — and a form rejected for asking applicants for sensitive data
+// must not stay reachable. A deny-list (`status <> 'draft'`) would publish
+// every new status by default; this one hides it until it's added here.
 async function loadPublicForm(db: Database, match: SQL) {
   const [row] = await db
     .select({
@@ -90,7 +95,7 @@ async function loadPublicForm(db: Database, match: SQL) {
     .where(
       and(
         match,
-        ne(forms.status, 'draft'),
+        inArray(forms.status, ['published', 'closed']),
         eq(events.status, 'upcoming'),
         notCurrentlyBanned
       )

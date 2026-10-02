@@ -10,6 +10,7 @@ import {
   DashboardSquare02Icon,
   Calendar03Icon,
   Analytics01Icon,
+  CheckListIcon,
   Logout02Icon,
   Tag01Icon,
 } from '@hugeicons/core-free-icons'
@@ -49,6 +50,7 @@ export const ORG_SIDEBAR_CONFIG: SidebarConfig = {
   navLinks: [
     { href: '/org/dashboard', label: 'Overview', icon: DashboardSquare02Icon },
     { href: '/org/events', label: 'My Events', icon: Calendar03Icon },
+    { href: '/org/forms', label: 'Forms', icon: CheckListIcon },
     { href: '/org/vouchers', label: 'Vouchers', icon: Tag01Icon },
   ],
   profileHref: '/org/profile',

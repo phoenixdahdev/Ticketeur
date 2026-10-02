@@ -15,6 +15,13 @@ import {
 
 import { formatEventDateRange } from './dates'
 import type { FlutterwaveTransaction } from './flutterwave'
+import { sendSubmissionConfirmation } from './form-emails'
+import {
+  creditRegistrationFee,
+  releaseUnpaidSubmission,
+  type RegistrationCredit,
+  type RegistrationCreditFailure,
+} from './form-payments'
 import {
   checkPaidAmount,
   PAYMENT_CURRENCY,
@@ -33,6 +40,24 @@ export class TicketStockError extends Error {
   constructor(public readonly tierName?: string) {
     super('Ticket stock no longer available')
     this.name = 'TicketStockError'
+  }
+}
+
+// A verified charge pays for the order, but fulfillOrder can't deliver what
+// the order is for: a type with no fulfilment yet (vendor_fee,
+// vote_purchase), or a registration fee whose submission can't be found.
+// Thrown out of fulfillOrder's transaction, so nothing is written and the
+// order stays as it was for a person to settle. Every caller already treats
+// a throw that way: the webhook refuses the call, the return page shows the
+// processing screen, and the reconciliation job counts an error.
+export class OrderNotFulfillableError extends Error {
+  constructor(
+    public readonly orderId: string,
+    public readonly orderType: string,
+    public readonly reason: 'unsupported_type' | RegistrationCreditFailure
+  ) {
+    super(`Order ${orderId} (${orderType}) cannot be fulfilled: ${reason}`)
+    this.name = 'OrderNotFulfillableError'
   }
 }
 
@@ -191,8 +216,18 @@ export type ChargeRejection = {
 
 type OrderRow = typeof orders.$inferSelect
 
+// What a fulfilment delivered, by order type.
+export type FulfilmentCredit =
+  | { kind: 'tickets' }
+  | ({ kind: 'registration' } & RegistrationCredit)
+
 export type FulfillOrderResult =
-  | { outcome: 'fulfilled'; order: OrderRow; justFulfilled: true }
+  | {
+      outcome: 'fulfilled'
+      order: OrderRow
+      justFulfilled: true
+      credit: FulfilmentCredit
+    }
   | { outcome: 'already_paid'; order: OrderRow; justFulfilled: false }
   | {
       outcome: 'rejected'
@@ -239,20 +274,27 @@ function assessCharge(
 }
 
 // Idempotent: if the order is already paid it's a no-op.
-// Bumps tier.sold per line and mints tickets per line in the same call.
 //
 // Every path that marks an order paid comes through here — the FW webhook,
 // the /checkout/return page and the reconciliation job — and each must hand
 // over the gateway's verified charge. The charge is checked under the row
-// lock, against the locked row, before anything is minted: it must be
+// lock, against the locked row, before anything is delivered: it must be
 // successful, carry this order's tx_ref, be in NGN and cover what checkout
 // asked Flutterwave to charge (see payment-amount.ts). A charge that fails
 // the check fulfils nothing.
 //
+// What is delivered depends on the order's type, read from the same locked
+// row, and is decided only after the check (deliverOrder): a 'ticket' order
+// bumps tier.sold and mints its tickets, a 'registration_fee' order completes
+// its submission. 'vendor_fee' and 'vote_purchase' have no fulfilment yet and
+// are refused with OrderNotFulfillableError, never minted as tickets. The
+// check runs for every type because it comes first, and no per-type step is
+// exported or called from anywhere else.
+//
 // Returns `justFulfilled: true` only when this call did the pending→paid
 // transition. Side-effect callers (email, PDF) should gate on that flag so
 // the work runs exactly once even when the FW webhook + return page both
-// race in to fulfill.
+// race in to fulfill; notifyFulfilment does.
 export async function fulfillOrder({
   orderId,
   charge,
@@ -340,6 +382,21 @@ export async function fulfillOrder({
           .where(eq(orders.id, order.id))
         current = { ...order, status: 'failed', flwTransactionId }
       }
+      // A registration fee this charge didn't cover: the submission's spot is
+      // released in the same transaction that fails the order. Idempotent, so
+      // a repeat of this rejection releases nothing more; and a later charge
+      // that does cover the fee still completes the submission.
+      if (
+        chargeIsForThisOrder &&
+        current.status === 'failed' &&
+        order.type === 'registration_fee'
+      ) {
+        await releaseUnpaidSubmission(
+          tx,
+          { orderId: order.id },
+          'payment_rejected'
+        )
+      }
       // Logged here, not by each caller, so the webhook, the return page and
       // the reconciliation job all record the same detail.
       console.error('[orders] verified charge does not pay for the order', {
@@ -358,66 +415,9 @@ export async function fulfillOrder({
       }
     }
 
-    const items = await tx
-      .select({
-        tierId: orderItems.tierId,
-        tierName: orderItems.tierName,
-        quantity: orderItems.quantity,
-      })
-      .from(orderItems)
-      .where(eq(orderItems.orderId, order.id))
-
-    // Resolve who each ticket belongs to. A group order carries its attendees
-    // (captured at checkout); a "for myself" order mints to the buyer, expanding
-    // each tier line by quantity.
-    const tierNameById = new Map(items.map((i) => [i.tierId, i.tierName]))
-    const mint: MintTicket[] =
-      order.attendees && order.attendees.length > 0
-        ? order.attendees.map((a) => ({
-            tierId: a.tierId,
-            tierName: tierNameById.get(a.tierId),
-            recipientName: a.name,
-            recipientEmail: a.email,
-          }))
-        : items.flatMap((i) =>
-            Array.from({ length: i.quantity }, () => ({
-              tierId: i.tierId,
-              tierName: i.tierName,
-              recipientName: order.buyerName || null,
-              recipientEmail: order.buyerEmail || null,
-            }))
-          )
-
-    try {
-      await mintOrderTickets(tx, {
-        orderId: order.id,
-        eventId: order.eventId,
-        tickets: mint,
-      })
-    } catch (err) {
-      if (err instanceof TicketStockError) {
-        // Stock disappeared between checkout and fulfillment. Mark failed.
-        await tx
-          .update(orders)
-          .set({ status: 'failed' })
-          .where(eq(orders.id, order.id))
-        throw new Error(
-          'Stock no longer available for one of the selected tiers'
-        )
-      }
-      throw err
-    }
-
-    // Count the voucher redemption now that payment succeeded. Unconditional:
-    // the cap is enforced at checkout (validateVoucher), and the buyer has
-    // already paid the discounted amount, so we honour it even in the rare
-    // race where the voucher maxed out between checkout and payment.
-    if (order.voucherId) {
-      await tx
-        .update(vouchers)
-        .set({ redeemedCount: sql`${vouchers.redeemedCount} + 1` })
-        .where(eq(vouchers.id, order.voucherId))
-    }
+    // Only a charge that pays for this order gets here, whatever its type:
+    // the type decides what is delivered, never whether the charge is checked.
+    const credit = await deliverOrder(tx, order, flwTransactionId)
 
     const paidAt = new Date()
     await tx
@@ -453,15 +453,163 @@ export async function fulfillOrder({
       outcome: 'fulfilled',
       order: { ...order, status: 'paid' as const, paidAt, flwTransactionId },
       justFulfilled: true,
+      credit,
     }
   })
 }
 
+// Deliver what a paid order is for. Called only by fulfillOrder, inside its
+// transaction, holding the order row lock, after the charge has passed
+// assessCharge; deliberately not exported, so nothing can deliver without
+// that check. Throws to refuse: the transaction rolls back and the order is
+// left untouched.
+async function deliverOrder(
+  tx: DbTransaction,
+  order: OrderRow,
+  flwTransactionId: string
+): Promise<FulfilmentCredit> {
+  const refuse = (reason: OrderNotFulfillableError['reason']) => {
+    // Money reached us for this order and nothing was delivered for it, so it
+    // has to be seen: the order needs a person to settle or refund it.
+    console.error('[orders] paid order cannot be fulfilled', {
+      orderId: order.id,
+      orderType: order.type,
+      referenceId: order.referenceId,
+      flwTransactionId,
+      reason,
+    })
+    return new OrderNotFulfillableError(order.id, order.type, reason)
+  }
+
+  switch (order.type) {
+    case 'ticket':
+      await mintTicketsForOrder(tx, order)
+      return { kind: 'tickets' }
+
+    case 'registration_fee': {
+      const result = await creditRegistrationFee(tx, order)
+      if (!result.ok) throw refuse(result.reason)
+      return { kind: 'registration', ...result.credit }
+    }
+
+    // Not built yet. These must never fall through to minting tickets that
+    // were never bought: refused, and left for a person, until each has its
+    // own case here.
+    case 'vendor_fee':
+    case 'vote_purchase':
+      throw refuse('unsupported_type')
+
+    default: {
+      // The column is plain text, so it can hold a type this code doesn't
+      // know. Refused the same way. (Also a compile-time check that every
+      // OrderType has a case above.)
+      const unhandled: never = order.type
+      void unhandled
+      throw refuse('unsupported_type')
+    }
+  }
+}
+
+// A ticket order's fulfilment, unchanged from before order types existed:
+// bump tier.sold and mint one ticket per seat, then count the voucher.
+async function mintTicketsForOrder(
+  tx: DbTransaction,
+  order: OrderRow
+): Promise<void> {
+  const items = await tx
+    .select({
+      tierId: orderItems.tierId,
+      tierName: orderItems.tierName,
+      quantity: orderItems.quantity,
+    })
+    .from(orderItems)
+    .where(eq(orderItems.orderId, order.id))
+
+  // Resolve who each ticket belongs to. A group order carries its attendees
+  // (captured at checkout); a "for myself" order mints to the buyer, expanding
+  // each tier line by quantity.
+  const tierNameById = new Map(items.map((i) => [i.tierId, i.tierName]))
+  const mint: MintTicket[] =
+    order.attendees && order.attendees.length > 0
+      ? order.attendees.map((a) => ({
+          tierId: a.tierId,
+          tierName: tierNameById.get(a.tierId),
+          recipientName: a.name,
+          recipientEmail: a.email,
+        }))
+      : items.flatMap((i) =>
+          Array.from({ length: i.quantity }, () => ({
+            tierId: i.tierId,
+            tierName: i.tierName,
+            recipientName: order.buyerName || null,
+            recipientEmail: order.buyerEmail || null,
+          }))
+        )
+
+  try {
+    await mintOrderTickets(tx, {
+      orderId: order.id,
+      eventId: order.eventId,
+      tickets: mint,
+    })
+  } catch (err) {
+    if (err instanceof TicketStockError) {
+      // Stock disappeared between checkout and fulfillment. Mark failed.
+      await tx
+        .update(orders)
+        .set({ status: 'failed' })
+        .where(eq(orders.id, order.id))
+      throw new Error('Stock no longer available for one of the selected tiers')
+    }
+    throw err
+  }
+
+  // Count the voucher redemption now that payment succeeded. Unconditional:
+  // the cap is enforced at checkout (validateVoucher), and the buyer has
+  // already paid the discounted amount, so we honour it even in the rare
+  // race where the voucher maxed out between checkout and payment.
+  if (order.voucherId) {
+    await tx
+      .update(vouchers)
+      .set({ redeemedCount: sql`${vouchers.redeemedCount} + 1` })
+      .where(eq(vouchers.id, order.voucherId))
+  }
+}
+
 /**
- * Generate the PDF(s) + dispatch confirmation email(s) for a paid order.
- * The FW webhook, the /checkout/return page and the reconciliation job call
- * this — guarded by `justFulfilled` from `fulfillOrder` so it runs exactly
- * once.
+ * The side effects of a fulfilment, for every order type: the ticket PDF and
+ * email for a ticket order, the confirmation email for a registration fee.
+ * The FW webhook, the /checkout/return page and the reconciliation job each
+ * call this with fulfillOrder's result. It does nothing unless that call did
+ * the pending→paid transition (`justFulfilled`), so when they race, the
+ * notification still goes out exactly once.
+ */
+export async function notifyFulfilment(
+  result: FulfillOrderResult,
+  baseUrl: string
+): Promise<void> {
+  if (!result.justFulfilled) return
+  const { credit } = result
+  switch (credit.kind) {
+    case 'tickets':
+      await notifyOrderFulfilled({ orderId: result.order.id, baseUrl })
+      return
+    case 'registration':
+      // Only when this payment completed the submission: a payment recorded
+      // against one already decided changes nothing to tell the applicant.
+      if (credit.completed) {
+        await sendSubmissionConfirmation(credit.submissionId, { baseUrl })
+      }
+      return
+  }
+}
+
+/**
+ * Generate the PDF(s) + dispatch confirmation email(s) for a paid ticket
+ * order. Reached through notifyFulfilment (the FW webhook, the
+ * /checkout/return page and the reconciliation job), guarded by
+ * `justFulfilled` from `fulfillOrder` so it runs exactly once, and directly
+ * by free checkout.
  *
  * "For Myself" orders send one email to the buyer with a combined PDF. "For
  * Multiple" orders send each attendee their own email + a PDF scoped to just
@@ -480,6 +628,15 @@ export async function notifyOrderFulfilled({
     // has paid and there is nothing to email tickets from.
     console.error('[orders] cannot notify a fulfilled order with no row', {
       orderId,
+    })
+    return
+  }
+  if (head.order.type !== 'ticket') {
+    // Only ticket orders have tickets to send; notifyFulfilment routes the
+    // other types to their own notification.
+    console.error('[orders] ticket notifier called for a non-ticket order', {
+      orderId,
+      orderType: head.order.type,
     })
     return
   }

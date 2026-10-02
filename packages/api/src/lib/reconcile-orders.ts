@@ -9,10 +9,16 @@
 // row lock, the same amount and currency verification, and the same
 // justFulfilled guard on the email. This job only ever fails an order with a
 // conditional update on status = 'pending'.
+//
+// Covers the order types fulfillOrder can fulfil: 'ticket' and
+// 'registration_fee'. 'vendor_fee' and 'vote_purchase' join once they have
+// fulfilment of their own. A registration fee that ends unpaid (every attempt
+// failed, or still unpaid when it leaves the window) also gives back the spot
+// its submission holds; see expireUnpaidRegistrations.
 
-import { and, desc, eq, isNotNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm'
 
-import { db, orders } from '@ticketur/db'
+import { db, orders, submissions } from '@ticketur/db'
 
 import {
   listTransactionsByReference,
@@ -20,12 +26,18 @@ import {
   verifyTransactionByReference,
   type FlutterwaveTransaction,
 } from './flutterwave'
-import { fulfillOrder, notifyOrderFulfilled } from './orders'
+import { releaseUnpaidSubmission } from './form-payments'
+import { fulfillOrder, notifyFulfilment } from './orders'
 
 // At most this many orders per run, newest first.
 const BATCH_SIZE = 50
+// At most this many expired registration fees per run, oldest first.
+const EXPIRE_BATCH_SIZE = 20
 // Each Flutterwave request gives up after this long.
 const GATEWAY_TIMEOUT_MS = 8_000
+// How far back the job looks. Also how long an unpaid registration fee holds
+// its spot: one still unpaid past this is released.
+const WINDOW = sql.raw(`interval '48 hours'`)
 
 export type ReconcileSummary = {
   // Pending orders in the window this run picked up.
@@ -46,6 +58,9 @@ export type ReconcileSummary = {
   errors: number
   // Not reached before the time budget ran out; picked up next run.
   deferred: number
+  // Registration fees still unpaid past the window (after one last look at
+  // Flutterwave): their submissions' spots were released.
+  expired: number
 }
 
 type Outcome =
@@ -107,15 +122,17 @@ async function settle(
   // buyer is now served, but one of those paths is failing, so log it.
   console.error('[reconcile] fulfilled a paid order the webhook missed', {
     orderId: order.id,
+    orderType: result.order.type,
     txRef: order.flwTxRef,
     flwTransactionId: String(charge.id),
   })
   try {
-    await notifyOrderFulfilled({ orderId: order.id, baseUrl })
+    // Tickets for a ticket order, the confirmation for a registration fee.
+    await notifyFulfilment(result, baseUrl)
   } catch (err) {
-    // The order is paid now, so no later run comes back to it. The tickets
-    // email has to be resent by hand.
-    console.error('[reconcile] fulfilled order but could not send tickets', {
+    // The order is paid now, so no later run comes back to it. The email has
+    // to be resent by hand.
+    console.error('[reconcile] fulfilled order but could not notify', {
       orderId: order.id,
       error: err,
     })
@@ -208,20 +225,133 @@ async function reconcileOrder(
   ) {
     // No flw_transaction_id is stored: nothing was taken. That keeps these
     // apart from fulfillOrder's rejected charges, which do need a refund.
-    const failed = await db
-      .update(orders)
-      .set({ status: 'failed' })
-      .where(and(eq(orders.id, order.id), eq(orders.status, 'pending')))
-      .returning({ id: orders.id })
-    return failed.length > 0 ? 'marked_failed' : 'settled_elsewhere'
+    // A registration fee's spot goes back in the same transaction, so the
+    // order can't end up failed with its spot still held. A charge that
+    // succeeds later still fulfils it from 'failed', and takes a spot again.
+    const failed = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(orders)
+        .set({ status: 'failed' })
+        .where(and(eq(orders.id, order.id), eq(orders.status, 'pending')))
+        .returning({ id: orders.id, type: orders.type })
+      if (row?.type === 'registration_fee') {
+        await releaseUnpaidSubmission(
+          tx,
+          { orderId: row.id },
+          'payment_failed'
+        )
+      }
+      return row !== undefined
+    })
+    return failed ? 'marked_failed' : 'settled_elsewhere'
   }
   return 'still_pending'
+}
+
+// reconcileOrder, with a throw turned into an 'error' outcome (except a
+// refused secret key, which stops the run).
+async function reconcileSafely(
+  order: Candidate,
+  baseUrl: string
+): Promise<Outcome> {
+  try {
+    return await reconcileOrder(order, baseUrl)
+  } catch (err) {
+    if (err instanceof GatewayAuthError) throw err
+    // e.g. a tier that sold out after payment, or an order fulfillOrder
+    // can't deliver (OrderNotFulfillableError): fulfillOrder throws, and the
+    // order stays pending (retried each run until it ages out of the window)
+    // for a person to refund or fulfil by hand.
+    console.error('[reconcile] could not settle order', {
+      orderId: order.id,
+      txRef: order.flwTxRef,
+      error: err,
+    })
+    return 'error'
+  }
+}
+
+// A registration fee still unpaid when its order leaves the window would
+// hold its submission's spot forever: nothing looks at it again. Each one
+// gets a last look at Flutterwave, which settles it if it was paid after all
+// (or fails it if every attempt failed, releasing the spot that way). One
+// still pending after that is released here, cause 'expired'. The order
+// itself stays pending, so a payment that lands even later still reaches the
+// webhook and completes the submission again.
+//
+// Picks up only submissions still holding the spot, so each order is
+// released once and then drops out of this query.
+async function expireUnpaidRegistrations(
+  baseUrl: string,
+  deadline: number,
+  summary: ReconcileSummary
+): Promise<void> {
+  const rows = await db
+    .select({
+      id: orders.id,
+      flwTxRef: orders.flwTxRef,
+      createdAt: orders.createdAt,
+    })
+    .from(orders)
+    .innerJoin(
+      submissions,
+      and(
+        // Linked both ways, as createRegistrationOrder leaves them.
+        eq(submissions.id, orders.referenceId),
+        eq(submissions.orderId, orders.id),
+        eq(submissions.status, 'pending_payment')
+      )
+    )
+    .where(
+      and(
+        eq(orders.type, 'registration_fee'),
+        eq(orders.status, 'pending'),
+        isNotNull(orders.flwTxRef),
+        sql`${orders.createdAt} < now() - ${WINDOW}`
+      )
+    )
+    .orderBy(asc(orders.createdAt))
+    .limit(EXPIRE_BATCH_SIZE)
+
+  for (const [index, row] of rows.entries()) {
+    if (Date.now() >= deadline) {
+      summary.deferred += rows.length - index
+      return
+    }
+    if (!row.flwTxRef) continue // excluded by the query; narrows the type
+    const order = {
+      id: row.id,
+      flwTxRef: row.flwTxRef,
+      createdAt: row.createdAt,
+    }
+
+    const outcome = await reconcileSafely(order, baseUrl)
+    if (outcome !== 'still_pending') {
+      summary[SUMMARY_FIELD[outcome]] += 1
+      continue
+    }
+    try {
+      const released = await db.transaction((tx) =>
+        releaseUnpaidSubmission(tx, { orderId: order.id }, 'expired')
+      )
+      // Nothing released: it was paid or released while we looked.
+      if (released.length > 0) summary.expired += 1
+      else summary.settledElsewhere += 1
+    } catch (err) {
+      console.error('[reconcile] could not release an expired registration', {
+        orderId: order.id,
+        error: err,
+      })
+      summary.errors += 1
+    }
+  }
 }
 
 /**
  * Re-checks pending orders against Flutterwave and settles each one: fulfils
  * it when a successful charge pays for it, fails it when every attempt
- * failed, and otherwise leaves it pending.
+ * failed, and otherwise leaves it pending. Then releases the spots of
+ * registration fees still unpaid past the window (expireUnpaidRegistrations).
  *
  * Orders are picked up from 10 minutes old (younger ones are left to the
  * webhook and the return page while the buyer may still be paying) to 48
@@ -250,13 +380,13 @@ export async function reconcilePendingOrders({
     .where(
       and(
         eq(orders.status, 'pending'),
-        // fulfillOrder fulfils by minting tickets. Other order types need
-        // their own fulfilment before this job may settle them.
-        eq(orders.type, 'ticket'),
+        // The types fulfillOrder can fulfil. vendor_fee and vote_purchase
+        // need fulfilment of their own before this job may settle them.
+        inArray(orders.type, ['ticket', 'registration_fee']),
         isNotNull(orders.flwTxRef),
         // Measured on the database clock, which stamped created_at.
         sql`${orders.createdAt} <= now() - interval '10 minutes'`,
-        sql`${orders.createdAt} >= now() - interval '48 hours'`
+        sql`${orders.createdAt} >= now() - ${WINDOW}`
       )
     )
     .orderBy(desc(orders.createdAt))
@@ -271,6 +401,7 @@ export async function reconcilePendingOrders({
     stillPending: 0,
     errors: 0,
     deferred: 0,
+    expired: 0,
   }
 
   for (const [index, row] of rows.entries()) {
@@ -285,22 +416,12 @@ export async function reconcilePendingOrders({
       createdAt: row.createdAt,
     }
 
-    let outcome: Outcome
-    try {
-      outcome = await reconcileOrder(order, baseUrl)
-    } catch (err) {
-      if (err instanceof GatewayAuthError) throw err
-      // e.g. a tier that sold out after payment: fulfillOrder throws, and the
-      // order stays pending (retried each run until it ages out of the
-      // window) for a person to refund or fulfil by hand.
-      console.error('[reconcile] could not settle order', {
-        orderId: order.id,
-        txRef: order.flwTxRef,
-        error: err,
-      })
-      outcome = 'error'
-    }
+    const outcome = await reconcileSafely(order, baseUrl)
     summary[SUMMARY_FIELD[outcome]] += 1
+  }
+
+  if (Date.now() < deadline) {
+    await expireUnpaidRegistrations(baseUrl, deadline, summary)
   }
 
   return summary

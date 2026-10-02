@@ -38,3 +38,13 @@ export type {
   VoucherCodePayload,
   AdminBroadcastPayload,
 } from './schema'
+export {
+  submissionConfirmationSchema,
+  submissionApprovedSchema,
+  submissionRejectedSchema,
+} from './schema'
+export type {
+  SubmissionConfirmationPayload,
+  SubmissionApprovedPayload,
+  SubmissionRejectedPayload,
+} from './schema'

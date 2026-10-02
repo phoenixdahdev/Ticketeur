@@ -147,9 +147,16 @@ export async function sendSubmissionRejected(
   try {
     const row = await load(submissionId, 'rejection', ['rejected'])
     if (!row) return
+    // A paid fee on a rejected application is money we are holding for a
+    // place that wasn't given. The rejection also records it on the Refunds
+    // Owed screen (lib/form-refunds.ts); this is the same fact told to the
+    // person who is owed it, by the same rule — the order reaching 'paid'.
+    const refundOwedMinor =
+      row.orderStatus === 'paid' ? (row.orderTotalMinor ?? 0) : 0
     await tasks.trigger('send-submission-rejected', {
       ...applicantFields(row),
       reason: row.reason ?? '',
+      refundOwedMinor,
     })
   } catch (err) {
     console.error('[forms] could not queue the rejection email', {

@@ -244,6 +244,9 @@ export const submissionRejectedSchema = z.object({
   reference: z.string(),
   // The organizer's reason, written for the applicant.
   reason: z.string().default(''),
+  // The registration fee we are holding for an application that was turned
+  // down, in kobo. Defaults to 0 so an older queued payload still parses.
+  refundOwedMinor: z.number().int().min(0).default(0),
 })
 
 export type SubmissionConfirmationPayload = z.infer<

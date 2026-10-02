@@ -18,6 +18,7 @@ export const sendSubmissionRejectedTask = task({
         eventTitle: data.eventTitle,
         reference: data.reference,
         reason: data.reason,
+        refundOwedMinor: data.refundOwedMinor,
       })
     )
 

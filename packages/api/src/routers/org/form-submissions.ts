@@ -170,49 +170,49 @@ export const orgFormSubmissionsRouter = createTRPCRouter({
 
       const [fields, priceOptionRows, reviewerRows, orderRows] =
         await Promise.all([
-        ctx.db
-          .select({
-            id: formFields.id,
-            label: formFields.label,
-            type: formFields.type,
-          })
-          .from(formFields)
-          .where(eq(formFields.formId, form.id))
-          .orderBy(asc(formFields.position), asc(formFields.id)),
-        submission.priceOptionId
-          ? ctx.db
-              .select({
-                id: formPriceOptions.id,
-                name: formPriceOptions.name,
-                priceMinor: formPriceOptions.priceMinor,
-              })
-              .from(formPriceOptions)
-              .where(eq(formPriceOptions.id, submission.priceOptionId))
-              .limit(1)
-          : Promise.resolve([]),
-        submission.reviewerId
-          ? ctx.db
-              .select({ id: user.id, name: user.name })
-              .from(user)
-              .where(eq(user.id, submission.reviewerId))
-              .limit(1)
-          : Promise.resolve([]),
-        // Whether the fee is actually with us, which is what decides whether
-        // rejecting owes a refund. An orderId on its own does not say: it is
-        // set the moment the application is created, long before anything is
-        // paid.
-        submission.orderId
-          ? ctx.db
-              .select({
-                status: orders.status,
-                totalMinor: orders.totalMinor,
-                paidAt: orders.paidAt,
-              })
-              .from(orders)
-              .where(eq(orders.id, submission.orderId))
-              .limit(1)
-          : Promise.resolve([]),
-      ])
+          ctx.db
+            .select({
+              id: formFields.id,
+              label: formFields.label,
+              type: formFields.type,
+            })
+            .from(formFields)
+            .where(eq(formFields.formId, form.id))
+            .orderBy(asc(formFields.position), asc(formFields.id)),
+          submission.priceOptionId
+            ? ctx.db
+                .select({
+                  id: formPriceOptions.id,
+                  name: formPriceOptions.name,
+                  priceMinor: formPriceOptions.priceMinor,
+                })
+                .from(formPriceOptions)
+                .where(eq(formPriceOptions.id, submission.priceOptionId))
+                .limit(1)
+            : Promise.resolve([]),
+          submission.reviewerId
+            ? ctx.db
+                .select({ id: user.id, name: user.name })
+                .from(user)
+                .where(eq(user.id, submission.reviewerId))
+                .limit(1)
+            : Promise.resolve([]),
+          // Whether the fee is actually with us, which is what decides whether
+          // rejecting owes a refund. An orderId on its own does not say: it is
+          // set the moment the application is created, long before anything is
+          // paid.
+          submission.orderId
+            ? ctx.db
+                .select({
+                  status: orders.status,
+                  totalMinor: orders.totalMinor,
+                  paidAt: orders.paidAt,
+                })
+                .from(orders)
+                .where(eq(orders.id, submission.orderId))
+                .limit(1)
+            : Promise.resolve([]),
+        ])
 
       const order = orderRows[0]
 

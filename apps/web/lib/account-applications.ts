@@ -10,7 +10,8 @@ import type { SubmissionStatus } from '@ticketur/db'
 // organizer took and an outcome the applicant received. Sharing one map would
 // make one of the two screens speak in the other's voice.
 
-export type ApplicationRow = RouterOutputs['account']['submissions']['list'][number]
+export type ApplicationRow =
+  RouterOutputs['account']['submissions']['list'][number]
 export type ApplicationDetail = NonNullable<
   RouterOutputs['account']['submissions']['byId']
 >

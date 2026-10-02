@@ -89,7 +89,11 @@ function Detail({ application }: { application: ApplicationDetail }) {
         href="/account/applications"
         className="text-foreground hover:text-primary inline-flex w-fit items-center gap-1.5 text-sm font-medium transition-colors"
       >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" strokeWidth={2} />
+        <HugeiconsIcon
+          icon={ArrowLeft01Icon}
+          className="size-4"
+          strokeWidth={2}
+        />
         My applications
       </Link>
 
@@ -115,7 +119,8 @@ function Detail({ application }: { application: ApplicationDetail }) {
               className="size-4 shrink-0"
               strokeWidth={1.8}
             />
-            {formatEventDate(event.eventDate, event.endDate)} · {event.eventTime}
+            {formatEventDate(event.eventDate, event.endDate)} ·{' '}
+            {event.eventTime}
           </li>
           <li className="inline-flex items-center gap-1.5">
             <HugeiconsIcon
@@ -185,13 +190,12 @@ function Detail({ application }: { application: ApplicationDetail }) {
                 <Row label="Fee" value={formatFee(payment.subtotalMinor)} />
               ) : null}
               {payment.feeMinor > 0 ? (
-                <Row
-                  label="Service fee"
-                  value={formatFee(payment.feeMinor)}
-                />
+                <Row label="Service fee" value={formatFee(payment.feeMinor)} />
               ) : null}
               <Row
-                label={payment.status === 'paid' ? 'Total paid' : 'Total to pay'}
+                label={
+                  payment.status === 'paid' ? 'Total paid' : 'Total to pay'
+                }
                 value={formatFee(payment.totalMinor)}
               />
               {payment.paidAt ? (
@@ -232,13 +236,7 @@ function Detail({ application }: { application: ApplicationDetail }) {
 // The way back into a payment the applicant walked away from. It re-opens the
 // SAME Flutterwave checkout — same order, same amount — so this is the one
 // button, not a second way to pay; see account/submissions.ts resumePayment.
-function ResumePayment({
-  id,
-  totalMinor,
-}: {
-  id: string
-  totalMinor: number
-}) {
+function ResumePayment({ id, totalMinor }: { id: string; totalMinor: number }) {
   const trpc = useTRPC()
   const [leaving, setLeaving] = useState(false)
 
@@ -260,7 +258,9 @@ function ResumePayment({
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900 md:flex-row md:items-center md:justify-between dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
       <div className="flex flex-col gap-1">
-        <p className="font-semibold">Your {formatFee(totalMinor)} fee is unpaid</p>
+        <p className="font-semibold">
+          Your {formatFee(totalMinor)} fee is unpaid
+        </p>
         <p className="leading-6">
           Your spot is being held for you, but not indefinitely — finish the
           payment and your application goes to the organizer straight away.

@@ -55,7 +55,8 @@ export const REASON_LABEL: Record<string, string> = {
   unsupported_type: 'This kind of order has no fulfilment yet',
   submission_missing: 'The application this fee pays for no longer exists',
   fulfilment_failed: 'Fulfilment failed after the payment was accepted',
-  application_rejected: 'The organizer rejected the application this fee paid for',
+  application_rejected:
+    'The organizer rejected the application this fee paid for',
 }
 
 export function reasonLabel(reason: string): string {

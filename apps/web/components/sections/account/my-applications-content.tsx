@@ -212,11 +212,7 @@ function EmptyState() {
   return (
     <div className="border-border bg-muted/30 flex min-h-72 flex-col items-center justify-center gap-3 rounded-2xl border border-dashed p-10 text-center">
       <span className="bg-primary/10 text-primary flex size-14 items-center justify-center rounded-full">
-        <HugeiconsIcon
-          icon={File01Icon}
-          className="size-6"
-          strokeWidth={1.6}
-        />
+        <HugeiconsIcon icon={File01Icon} className="size-6" strokeWidth={1.6} />
       </span>
       <h2 className="font-heading text-foreground text-lg font-bold tracking-tight">
         No applications yet

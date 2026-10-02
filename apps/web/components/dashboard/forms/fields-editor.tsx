@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { HugeiconsIcon } from '@hugeicons/react'
@@ -77,16 +77,31 @@ export function FieldsEditor({
   const [order, setOrder] = useState<string[]>(() => fields.map((f) => f.id))
   const [announcement, setAnnouncement] = useState('')
 
-  const serverOrder = useMemo(() => fields.map((f) => f.id), [fields])
+  // Identity-stable across refetches that return the same questions in the
+  // same order, so the effect below only runs on a real change.
+  const serverKey = fields.map((field) => field.id).join(',')
+  const serverOrder = useMemo(
+    () => (serverKey === '' ? [] : serverKey.split(',')),
+    [serverKey]
+  )
 
-  // Follow the server whenever the set of questions changes (one was added or
-  // removed, or another tab saved an order), so the list can't drift.
+  // Follow the server when the questions change — one added, one deleted, or
+  // an order saved in another tab. An arrangement the organizer has not saved
+  // yet is not thrown away for it: the questions that still exist keep the
+  // places they were given, and anything new goes where the server has it.
+  const lastServerOrder = useRef(serverOrder)
   useEffect(() => {
+    const previous = lastServerOrder.current
+    lastServerOrder.current = serverOrder
     setOrder((current) => {
-      const sameSet =
-        current.length === serverOrder.length &&
-        current.every((id) => serverOrder.includes(id))
-      return sameSet ? current : serverOrder
+      const unsaved =
+        current.length !== previous.length ||
+        current.some((id, index) => id !== previous[index])
+      if (!unsaved) return serverOrder
+      const stillThere = new Set(serverOrder)
+      const kept = current.filter((id) => stillThere.has(id))
+      const added = serverOrder.filter((id) => !kept.includes(id))
+      return [...kept, ...added]
     })
   }, [serverOrder])
 

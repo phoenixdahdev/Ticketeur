@@ -90,7 +90,8 @@ export function FormSubmitted({
           {copied ? 'Copied' : 'Copy reference'}
         </Button>
         <p className="text-muted-foreground text-xs leading-5">
-          Quote this if you ever need to ask about your application.
+          Quote this if you ever need to ask about your application. It is
+          always in your account too, under My applications.
         </p>
       </div>
 
@@ -109,10 +110,10 @@ export function FormSubmitted({
 
       <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
         <Button asChild size="xl">
-          <Link href={`/events/${event.slug}`}>Back to {event.title}</Link>
+          <Link href="/account/applications">View my application</Link>
         </Button>
         <Button asChild variant="outline" size="xl">
-          <Link href="/events">Browse events</Link>
+          <Link href={`/events/${event.slug}`}>Back to {event.title}</Link>
         </Button>
       </div>
     </section>

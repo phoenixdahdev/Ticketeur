@@ -163,14 +163,17 @@ function shape(row: Row) {
     // platform's registration service fee on it, and the total. Null on a free
     // application, which has no order. `status` is the order's, so 'paid' is
     // the only value that means the money arrived.
+    // The `?? …` fallbacks are the LEFT JOIN's doing, not real cases: every
+    // column but paid_at is NOT NULL, so once orderId is non-null the order
+    // row is there and so are its amounts.
     payment:
       row.orderId === null
         ? null
         : {
-            status: row.orderStatus,
-            subtotalMinor: row.orderSubtotalMinor,
-            feeMinor: row.orderFeeMinor,
-            totalMinor: row.orderTotalMinor,
+            status: row.orderStatus ?? 'pending',
+            subtotalMinor: row.orderSubtotalMinor ?? 0,
+            feeMinor: row.orderFeeMinor ?? 0,
+            totalMinor: row.orderTotalMinor ?? 0,
             paidAt: row.orderPaidAt,
           },
     // There is a payment to go back and finish: the application is holding its

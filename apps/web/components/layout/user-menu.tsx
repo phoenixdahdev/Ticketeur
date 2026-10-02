@@ -11,6 +11,7 @@ import {
   Settings02Icon,
   Logout02Icon,
   Ticket01Icon,
+  File01Icon,
   DashboardSquare02Icon,
 } from '@hugeicons/core-free-icons'
 
@@ -205,6 +206,12 @@ export function UserMenu({
                 href="/account/tickets"
                 icon={Ticket01Icon}
                 label="My tickets"
+                onClick={() => setOpen(false)}
+              />
+              <MenuLink
+                href="/account/applications"
+                icon={File01Icon}
+                label="My applications"
                 onClick={() => setOpen(false)}
               />
               <MenuLink

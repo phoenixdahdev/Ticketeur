@@ -493,9 +493,14 @@ function RegistrationScreen({
         </div>
       ) : null}
 
-      <Button asChild size="xl">
-        <Link href={`/events/${event.slug}`}>Back to event</Link>
-      </Button>
+      <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
+        <Button asChild size="xl">
+          <Link href="/account/applications">View my application</Link>
+        </Button>
+        <Button asChild variant="outline" size="xl">
+          <Link href={`/events/${event.slug}`}>Back to event</Link>
+        </Button>
+      </div>
     </section>
   )
 }

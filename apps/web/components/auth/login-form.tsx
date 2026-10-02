@@ -21,6 +21,7 @@ import {
 } from '@ticketur/ui/components/field'
 
 import { authClient } from '@/lib/auth-client'
+import { withNext } from '@/lib/post-login-redirect'
 import { SocialAuthButtons } from '@/components/auth/social-auth-buttons'
 
 const loginSchema = z.object({
@@ -30,7 +31,10 @@ const loginSchema = z.object({
 
 type LoginValues = z.infer<typeof loginSchema>
 
-export function LoginForm() {
+// `next` is where the person was headed before sign-in interrupted them (a
+// registration form they were filling in, say). It rides along to /post-login,
+// and through 2FA when that is in the way.
+export function LoginForm({ next }: { next?: string | null }) {
   const router = useRouter()
   const [showPassword, setShowPassword] = useState(false)
   const [isPending, startTransition] = useTransition()
@@ -56,12 +60,12 @@ export function LoginForm() {
       }
 
       if (result && 'twoFactorRedirect' in result && result.twoFactorRedirect) {
-        router.push('/two-factor')
+        router.push(withNext('/two-factor', next))
         return
       }
 
       toast.success('Welcome back')
-      router.push('/post-login')
+      router.push(withNext('/post-login', next))
       // Refresh so server components (notably the session-aware site header)
       // re-render with the new session instead of the cached logged-out view.
       // Without this the header only updates after a manual page reload.
@@ -162,7 +166,7 @@ export function LoginForm() {
 
       <FieldSeparator>or</FieldSeparator>
 
-      <SocialAuthButtons />
+      <SocialAuthButtons next={next} />
     </form>
   )
 }

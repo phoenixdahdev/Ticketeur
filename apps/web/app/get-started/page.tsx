@@ -5,7 +5,11 @@ import { redirect } from 'next/navigation'
 import { RoleCard, type RoleCardProps } from '@/components/auth/role-card'
 import { AuthHeader } from '@/components/layout/auth-header'
 import { getSession } from '@/lib/auth'
-import { getPostLoginPath } from '@/lib/post-login-redirect'
+import {
+  getPostLoginPath,
+  safeNextPath,
+  withNext,
+} from '@/lib/post-login-redirect'
 
 export const metadata: Metadata = {
   title: 'Get Started',
@@ -40,14 +44,18 @@ const ROLES: Array<Omit<RoleCardProps, 'index'>> = [
   },
 ]
 
-export default async function GetStartedPage() {
+export default async function GetStartedPage(props: PageProps<'/get-started'>) {
+  // Where to return to once the account exists; carried onto each role's
+  // sign-up link and through verification.
+  const next = safeNextPath((await props.searchParams).next)
+
   // An already-authenticated user has no role to choose — send them straight
   // to their dashboard/home instead of the role-selection screen.
   const session = await getSession()
   if (session) {
     const role =
       (session.user as unknown as { role?: string | null }).role ?? null
-    redirect(getPostLoginPath(role))
+    redirect(getPostLoginPath(role, next))
   }
 
   return (
@@ -68,14 +76,19 @@ export default async function GetStartedPage() {
 
           <div className="grid w-full max-w-289.5 grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
             {ROLES.map((role, i) => (
-              <RoleCard key={role.title} {...role} index={i} />
+              <RoleCard
+                key={role.title}
+                {...role}
+                href={withNext(role.href ?? '/signup', next)}
+                index={i}
+              />
             ))}
           </div>
 
           <p className="text-muted-foreground text-base">
             Already have an account?{' '}
             <Link
-              href="/login"
+              href={withNext('/login', next)}
               className="text-primary font-medium hover:underline"
             >
               Log in

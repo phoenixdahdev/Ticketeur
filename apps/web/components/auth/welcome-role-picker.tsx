@@ -43,7 +43,15 @@ const ROLES: Array<{
   },
 ]
 
-export function WelcomeRolePicker({ name }: { name?: string | null }) {
+export function WelcomeRolePicker({
+  name,
+  next = null,
+}: {
+  name?: string | null
+  // Carried through onboarding by /post-login, so a first-time social sign-up
+  // that started on a registration form ends up back on it.
+  next?: string | null
+}) {
   const trpc = useTRPC()
   const router = useRouter()
   const [pendingRole, setPendingRole] = useState<SelectableRole | null>(null)
@@ -55,7 +63,7 @@ export function WelcomeRolePicker({ name }: { name?: string | null }) {
         // the role only just changed (sessions read it from the DB, so the
         // server will see the new value).
         router.refresh()
-        router.replace(getPostLoginPath(result.role))
+        router.replace(getPostLoginPath(result.role, next))
       },
       onError: (e) => {
         setPendingRole(null)

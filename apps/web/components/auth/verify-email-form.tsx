@@ -15,6 +15,7 @@ import {
 } from '@ticketur/ui/components/input-otp'
 
 import { authClient } from '@/lib/auth-client'
+import { withNext } from '@/lib/post-login-redirect'
 
 const RESEND_COOLDOWN_SECONDS = 45
 
@@ -22,6 +23,8 @@ export function VerifyEmailForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const email = searchParams.get('email') ?? ''
+  // Carried from sign-up, so verifying lands back where they started.
+  const next = searchParams.get('next')
 
   const [otp, setOtp] = useState('')
   const [cooldown, setCooldown] = useState(0)
@@ -63,7 +66,7 @@ export function VerifyEmailForm() {
       toast.success('Email verified', {
         description: 'You can now sign in to your account.',
       })
-      router.push('/post-login')
+      router.push(withNext('/post-login', next))
     })
   }
 

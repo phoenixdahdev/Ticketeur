@@ -4,7 +4,11 @@ import { redirect } from 'next/navigation'
 import { AuthHeader } from '@/components/layout/auth-header'
 import { WelcomeRolePicker } from '@/components/auth/welcome-role-picker'
 import { getSession } from '@/lib/auth'
-import { getPostLoginPath, needsRoleSelection } from '@/lib/post-login-redirect'
+import {
+  getPostLoginPath,
+  needsRoleSelection,
+  safeNextPath,
+} from '@/lib/post-login-redirect'
 
 export const metadata: Metadata = {
   title: 'Welcome',
@@ -16,7 +20,8 @@ export const dynamic = 'force-dynamic'
 // Where better-auth sends a first-time social sign-up (newUserCallbackURL on
 // signIn.social). Google supplies no requestedRole, so these users land on the
 // default role and pick a real one here.
-export default async function WelcomePage() {
+export default async function WelcomePage(props: PageProps<'/welcome'>) {
+  const next = safeNextPath((await props.searchParams).next)
   const session = await getSession()
   if (!session) redirect('/login')
 
@@ -29,14 +34,14 @@ export default async function WelcomePage() {
   // Onboarding only. Anyone who already holds a real role, or who picked one
   // before, has nothing to choose — chooseRole would reject them anyway.
   if (!needsRoleSelection(role, user.requestedRole)) {
-    redirect(getPostLoginPath(role))
+    redirect(getPostLoginPath(role, next))
   }
 
   return (
     <div className="dark:bg-background flex min-h-svh flex-col bg-[#fafafa]">
       <AuthHeader />
       <main className="flex flex-1 flex-col">
-        <WelcomeRolePicker name={user.name ?? null} />
+        <WelcomeRolePicker name={user.name ?? null} next={next} />
       </main>
     </div>
   )

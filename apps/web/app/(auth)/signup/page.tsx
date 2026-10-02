@@ -6,7 +6,11 @@ import { AuthShell } from '@/components/auth/auth-shell'
 import { SignupForm } from '@/components/auth/signup-form'
 import { resolveSignupRole } from '@/lib/signup-roles'
 import { getSession } from '@/lib/auth'
-import { getPostLoginPath } from '@/lib/post-login-redirect'
+import {
+  getPostLoginPath,
+  safeNextPath,
+  withNext,
+} from '@/lib/post-login-redirect'
 
 export const metadata: Metadata = {
   title: 'Sign Up',
@@ -23,6 +27,9 @@ export default async function SignupPage(props: PageProps<'/signup'>) {
   // An invite forces the role to vendor regardless of any other query.
   const invite = pickFirst(searchParams.invite)
   const isVendorInvite = invite === 'vendor'
+  // Where to return to once the account is verified.
+  const next = safeNextPath(searchParams.next)
+  const signInHref = withNext('/login', next)
 
   // Already-authenticated users shouldn't be creating another account. Send
   // them to their dashboard/home. The vendor-invite flow is exempt: it may be
@@ -32,7 +39,7 @@ export default async function SignupPage(props: PageProps<'/signup'>) {
     if (session) {
       const role =
         (session.user as unknown as { role?: string | null }).role ?? null
-      redirect(getPostLoginPath(role))
+      redirect(getPostLoginPath(role, next))
     }
   }
 
@@ -49,7 +56,7 @@ export default async function SignupPage(props: PageProps<'/signup'>) {
       <div className="text-muted-foreground hidden items-center justify-end text-sm md:flex">
         Already have an account?&nbsp;
         <Link
-          href="/login"
+          href={signInHref}
           className="text-primary font-semibold hover:underline"
         >
           Sign In
@@ -78,12 +85,13 @@ export default async function SignupPage(props: PageProps<'/signup'>) {
         config={config}
         initialEmail={initialEmail}
         lockEmail={isVendorInvite && initialEmail.length > 0}
+        next={next}
       />
 
       <p className="text-muted-foreground mt-2 text-center text-sm md:hidden">
         Already have an account?{' '}
         <Link
-          href="/login"
+          href={signInHref}
           className="text-primary font-semibold hover:underline"
         >
           Sign In

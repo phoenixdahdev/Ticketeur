@@ -15,10 +15,11 @@ import {
 } from '@ticketur/ui/components/input-otp'
 
 import { authClient } from '@/lib/auth-client'
+import { withNext } from '@/lib/post-login-redirect'
 
 type Mode = 'totp' | 'backup'
 
-export function TwoFactorForm() {
+export function TwoFactorForm({ next }: { next?: string | null }) {
   const router = useRouter()
   const [mode, setMode] = useState<Mode>('totp')
   const [code, setCode] = useState('')
@@ -41,7 +42,7 @@ export function TwoFactorForm() {
       }
 
       toast.success('Signed in')
-      router.push('/post-login')
+      router.push(withNext('/post-login', next))
     })
   }
 
@@ -60,7 +61,7 @@ export function TwoFactorForm() {
       }
 
       toast.success('Signed in with backup code')
-      router.push('/post-login')
+      router.push(withNext('/post-login', next))
     })
   }
 

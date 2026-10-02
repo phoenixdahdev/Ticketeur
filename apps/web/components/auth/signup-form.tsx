@@ -34,6 +34,7 @@ import {
   type SignupRoleConfig,
 } from '@/lib/signup-roles'
 import { authClient } from '@/lib/auth-client'
+import { withNext } from '@/lib/post-login-redirect'
 import { PasswordStrength } from '@/components/auth/password-strength'
 import { SocialAuthButtons } from '@/components/auth/social-auth-buttons'
 
@@ -54,10 +55,13 @@ export function SignupForm({
   config,
   initialEmail = '',
   lockEmail = false,
+  next = null,
 }: {
   config: SignupRoleConfig
   initialEmail?: string
   lockEmail?: boolean
+  // Where to return to once the account exists and its email is verified.
+  next?: string | null
 }) {
   const router = useRouter()
   const [showPassword, setShowPassword] = useState(false)
@@ -110,7 +114,12 @@ export function SignupForm({
       toast.success('Account created', {
         description: 'Check your inbox for a verification code.',
       })
-      router.push(`/verify-email?email=${encodeURIComponent(data.email ?? '')}`)
+      router.push(
+        withNext(
+          `/verify-email?email=${encodeURIComponent(data.email ?? '')}`,
+          next
+        )
+      )
     })
   }
 
@@ -338,7 +347,7 @@ export function SignupForm({
 
       <FieldSeparator>or</FieldSeparator>
 
-      <SocialAuthButtons />
+      <SocialAuthButtons next={next} />
     </form>
   )
 }

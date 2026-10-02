@@ -215,8 +215,11 @@ export const orders = pgTable(
     // 'ticket' is the default and the migration backfills them to it.
     type: text('type').$type<OrderType>().notNull().default('ticket'),
     // Points to the row `type` says the order pays for: a form submission for
-    // 'registration_fee', a contest entry for 'vote_purchase'. NULL for
-    // 'ticket' orders, whose lines live in order_items.
+    // 'registration_fee', the CONTEST for 'vote_purchase'. Not the entry —
+    // buying votes grants a balance held per (contest, voter) in
+    // vote_credits, and the voter chooses who to spend it on afterwards, so a
+    // purchase names no entry. NULL for 'ticket' orders, whose lines live in
+    // order_items.
     // Not declared as a real FK because it's polymorphic.
     referenceId: text('reference_id'),
     // Legacy single-tier pointer. Nullable since a multi-tier order carries

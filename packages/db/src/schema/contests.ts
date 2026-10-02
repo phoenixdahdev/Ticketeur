@@ -351,7 +351,11 @@ export const votes = pgTable(
     }),
     // Paid votes can be allocated several at a time; a free vote is always 1.
     quantity: integer('quantity').notNull().default(1),
-    // The order whose credits paid for this, as a soft pointer. NULL for free.
+    // Reserved, and in practice ALWAYS NULL. Credits pool: a voter's balance
+    // may be the sum of several purchases, so no single order funds a given
+    // cast and naming one would be a fiction. The money's audit trail is
+    // `orders` plus `vote_credits.purchased`; this ledger records allocation,
+    // not payment. Kept for a future non-pooled path rather than dropped.
     orderId: text('order_id'),
     // 'YYYY-MM-DD', the day this vote counts against — the bucket the free
     // allowance resets on. Written for every vote so the index below is total.

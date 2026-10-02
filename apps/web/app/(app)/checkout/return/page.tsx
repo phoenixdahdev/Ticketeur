@@ -15,10 +15,14 @@ import { Button } from '@ticketur/ui/components/button'
 import { db, orders } from '@ticketur/db'
 import { verifyTransaction } from '@ticketur/api/lib/flutterwave'
 import {
+  loadRegistrationForOrder,
+  type RegistrationForOrder,
+} from '@ticketur/api/lib/form-payments'
+import {
   fulfillOrder,
   loadOrderById,
   loadOrderItems,
-  notifyOrderFulfilled,
+  notifyFulfilment,
   type OrderItemRow,
   type OrderWithDetails,
 } from '@ticketur/api/lib/orders'
@@ -52,7 +56,7 @@ export default async function CheckoutReturnPage({
   const txRef = pickFirst(sp.tx_ref)
   const transactionId = pickFirst(sp.transaction_id)
 
-  if (status === 'cancelled' || status === 'failed' || !txRef) {
+  if (!txRef) {
     return (
       <FailedScreen reason={status === 'cancelled' ? 'cancelled' : 'failed'} />
     )
@@ -63,6 +67,28 @@ export default async function CheckoutReturnPage({
     .from(orders)
     .where(eq(orders.flwTxRef, txRef))
     .limit(1)
+
+  if (status === 'cancelled' || status === 'failed') {
+    // A registration fee isn't a ticket purchase, and its application is
+    // still waiting on the fee, so it gets its own words. (Unless another
+    // attempt on the same checkout paid it already.)
+    if (order?.type === 'registration_fee') {
+      const head = await loadOrderById(order.id)
+      if (head) {
+        return (
+          <RegistrationScreen
+            state={head.order.status === 'paid' ? 'paid' : status}
+            head={head}
+            registration={await loadRegistrationForOrder(head.order)}
+          />
+        )
+      }
+    }
+    return (
+      <FailedScreen reason={status === 'cancelled' ? 'cancelled' : 'failed'} />
+    )
+  }
+
   if (!order) {
     // The buyer returned holding a Flutterwave tx_ref we have no order for —
     // the same "paid with nothing attached" case the webhook guards. Log it so
@@ -76,17 +102,16 @@ export default async function CheckoutReturnPage({
 
   // Belt-and-braces: the webhook should have already fulfilled this order, but
   // if the user beat it back we re-verify and fulfill here. Idempotent — only
-  // the pending→paid transition fires the email + PDF. fulfillOrder checks the
-  // verified charge's amount and currency itself, exactly as for the webhook;
-  // a charge that doesn't pay for the order leaves it 'failed' (handled below).
+  // the pending→paid transition fires the emails (and a ticket order's PDF).
+  // fulfillOrder checks the verified charge's amount and currency itself,
+  // exactly as for the webhook, and delivers by order type; a charge that
+  // doesn't pay for the order leaves it 'failed' (handled below).
   if (order.status !== 'paid' && transactionId) {
     try {
       const tx = await verifyTransaction(transactionId)
       if (tx && tx.status === 'successful' && tx.tx_ref === txRef) {
         const result = await fulfillOrder({ orderId: order.id, charge: tx })
-        if (result?.justFulfilled) {
-          await notifyOrderFulfilled({ orderId: order.id, baseUrl: getBaseUrl() })
-        }
+        if (result) await notifyFulfilment(result, getBaseUrl())
       }
     } catch (err) {
       // The webhook still retries this order, but a buyer parked on the
@@ -104,6 +129,29 @@ export default async function CheckoutReturnPage({
 
   const head = await loadOrderById(order.id)
   if (!head) return <FailedScreen reason="missing" />
+
+  // Only a ticket order gets the ticket views below.
+  if (head.order.type === 'registration_fee') {
+    return (
+      <RegistrationScreen
+        state={
+          head.order.status === 'paid'
+            ? 'paid'
+            : head.order.status === 'failed'
+              ? 'unconfirmed'
+              : 'processing'
+        }
+        head={head}
+        registration={await loadRegistrationForOrder(head.order)}
+      />
+    )
+  }
+  if (head.order.type !== 'ticket') {
+    // A type with no fulfilment yet (vendor_fee, vote_purchase): fulfillOrder
+    // refused it and left it for a person, so there is nothing to show yet.
+    return <OtherPaymentScreen reference={orderRef(order.id)} />
+  }
+
   // 'failed': a verified charge did not pay for the order, or the payment
   // itself failed. Either way nothing is still processing.
   if (head.order.status === 'failed') {
@@ -306,6 +354,167 @@ function FailedScreen({
           : "We couldn't complete your purchase"}
       </h1>
       <p className="text-muted-foreground text-sm leading-7">{message}</p>
+      <Button asChild size="xl">
+        <Link href="/events">Browse events</Link>
+      </Button>
+    </section>
+  )
+}
+
+type RegistrationState =
+  | 'paid'
+  | 'processing'
+  | 'unconfirmed'
+  | 'cancelled'
+  | 'failed'
+
+// A registration-fee payer's view: where their application stands and the
+// reference to quote. Never tickets: a registration fee doesn't buy any.
+function RegistrationScreen({
+  state,
+  head,
+  registration,
+}: {
+  state: RegistrationState
+  head: OrderWithDetails
+  registration: RegistrationForOrder | null
+}) {
+  const { order, event } = head
+  const formTitle = registration?.formTitle ?? 'this event'
+  const amount = formatNaira(order.totalMinor)
+  const reference = registration?.reference ?? orderRef(order.id)
+  const complete =
+    registration?.status === 'submitted' || registration?.status === 'approved'
+
+  const copy: {
+    eyebrow: string
+    title: string
+    body: string
+    tone: 'success' | 'neutral' | 'error'
+  } = (() => {
+    switch (state) {
+      case 'paid':
+        if (registration?.status === 'approved') {
+          return {
+            eyebrow: 'Payment confirmed',
+            title: "You're in!",
+            body: `Your ${amount} payment is confirmed and your application for ${formTitle} is approved.`,
+            tone: 'success',
+          }
+        }
+        if (registration?.status === 'submitted') {
+          return {
+            eyebrow: 'Payment confirmed',
+            title: 'Application submitted',
+            body: `Your ${amount} payment is confirmed. The organizer will review your application for ${formTitle}, and we'll email you when they decide.`,
+            tone: 'success',
+          }
+        }
+        return {
+          eyebrow: 'Payment received',
+          title: 'We received your payment',
+          body: `If you have questions about your application for ${formTitle}, contact support and quote reference ${reference}.`,
+          tone: 'success',
+        }
+      case 'processing':
+        return {
+          eyebrow: 'Processing',
+          title: "We're confirming your payment",
+          body: `This usually only takes a moment. Your application for ${formTitle} goes through once it clears, and we'll email you a confirmation.`,
+          tone: 'neutral',
+        }
+      case 'unconfirmed':
+        return {
+          eyebrow: 'Payment incomplete',
+          title: "We couldn't confirm your payment",
+          body: `We couldn't confirm a payment that covers the fee, so your application for ${formTitle} isn't complete. If you were charged, contact support and quote reference ${reference} so we can put it right.`,
+          tone: 'error',
+        }
+      case 'cancelled':
+        return {
+          eyebrow: 'Payment cancelled',
+          title: 'Your application is not complete',
+          body: `You cancelled the payment, so no charge was made. Your application for ${formTitle} only goes through once the fee is paid, so you can apply again whenever you're ready.`,
+          tone: 'error',
+        }
+      case 'failed':
+        return {
+          eyebrow: 'Payment incomplete',
+          title: "Your payment didn't go through",
+          body: `Your application for ${formTitle} only goes through once the fee is paid. Please apply again, or use a different card.`,
+          tone: 'error',
+        }
+    }
+  })()
+
+  return (
+    <section className="mx-auto flex w-full max-w-180 flex-col items-center gap-6 px-6 py-20 text-center md:py-28">
+      {copy.tone === 'success' ? (
+        <span className="flex size-16 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+          <HugeiconsIcon
+            icon={CheckmarkCircle02Icon}
+            className="size-8"
+            strokeWidth={2}
+          />
+        </span>
+      ) : null}
+      <p
+        className={`text-xs font-bold tracking-[0.2em] uppercase ${
+          copy.tone === 'error' ? 'text-destructive' : 'text-primary'
+        }`}
+      >
+        {copy.eyebrow}
+      </p>
+      <h1 className="font-heading text-foreground text-3xl font-bold tracking-tight md:text-4xl">
+        {copy.title}
+      </h1>
+      <p className="text-muted-foreground text-sm leading-7">{copy.body}</p>
+
+      {registration ? (
+        <div className="border-border bg-card flex w-full flex-col gap-2 rounded-2xl border p-5 text-left md:p-6">
+          <Row label="Application" value={registration.formTitle} />
+          <Row label="Event" value={event.title} />
+          <Row label="Reference" value={registration.reference} />
+          <Row label={state === 'paid' ? 'Fee paid' : 'Fee'} value={amount} />
+        </div>
+      ) : null}
+
+      {state === 'paid' && complete && registration ? (
+        <div className="text-muted-foreground flex items-center justify-center gap-2 text-center text-sm">
+          <HugeiconsIcon
+            icon={Mail01Icon}
+            className="text-primary size-4 shrink-0"
+            strokeWidth={1.8}
+          />
+          <span>
+            We&apos;ve sent a confirmation with your reference to{' '}
+            {registration.applicantEmail}.
+          </span>
+        </div>
+      ) : null}
+
+      <Button asChild size="xl">
+        <Link href={`/events/${event.slug}`}>Back to event</Link>
+      </Button>
+    </section>
+  )
+}
+
+// An order type with no fulfilment yet. Nothing was delivered, and nothing
+// here suggests tickets.
+function OtherPaymentScreen({ reference }: { reference: string }) {
+  return (
+    <section className="mx-auto flex w-full max-w-180 flex-col items-center gap-6 px-6 py-20 text-center md:py-28">
+      <p className="text-primary text-xs font-bold tracking-[0.2em] uppercase">
+        Processing
+      </p>
+      <h1 className="font-heading text-foreground text-3xl font-bold tracking-tight md:text-4xl">
+        We&apos;re confirming your payment
+      </h1>
+      <p className="text-muted-foreground text-sm leading-7">
+        We&apos;ll email you once it&apos;s confirmed. If you have questions,
+        contact support and quote order {reference}.
+      </p>
       <Button asChild size="xl">
         <Link href="/events">Browse events</Link>
       </Button>

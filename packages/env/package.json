@@ -14,12 +14,12 @@
   "dependencies": {
     "@t3-oss/env-core": "^0.13.11",
     "@t3-oss/env-nextjs": "^0.13.11",
-    "dotenv": "^18.0.4",
+    "dotenv": "^18.0.5",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@ticketur/typescript-config": "workspace:*",
-    "@types/node": "^26.6.3",
+    "@types/node": "^26.6.4",
     "typescript": "^6.0.3"
   }
 }

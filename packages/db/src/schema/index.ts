@@ -63,3 +63,11 @@ export {
   platformFeeChangesRelations,
   PLATFORM_SETTINGS_ROW_ID,
 } from './platform-settings'
+export {
+  paymentDiscrepancies,
+  paymentDiscrepanciesRelations,
+} from './payments'
+export type {
+  PaymentDiscrepancyKind,
+  PaymentDiscrepancyStatus,
+} from './payments'

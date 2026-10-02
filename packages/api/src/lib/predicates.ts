@@ -1,6 +1,14 @@
 import { and, eq, ne, sql } from 'drizzle-orm'
 
-import { events, forms, orderItems, orders, reports, user } from '@ticketur/db'
+import {
+  events,
+  forms,
+  orderItems,
+  orders,
+  paymentDiscrepancies,
+  reports,
+  user,
+} from '@ticketur/db'
 
 // ─── Visibility ─────────────────────────────────────────────────────────────
 
@@ -55,3 +63,5 @@ export const REPORT_OPEN = eq(reports.status, 'open')
 // A registration form waiting for an admin to approve its questions.
 export const FORM_PENDING = eq(forms.status, 'pending_review')
 export const PAID = eq(orders.status, 'paid')
+// A payment discrepancy nobody has recorded a refund for yet.
+export const DISCREPANCY_OPEN = eq(paymentDiscrepancies.status, 'open')

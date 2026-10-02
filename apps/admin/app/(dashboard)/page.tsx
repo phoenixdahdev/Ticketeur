@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 
 import { OverviewStats } from '@/components/dashboard/overview/overview-stats'
+import { RefundsOwedAlert } from '@/components/dashboard/overview/refunds-owed-alert'
 import { ModerationQueue } from '@/components/dashboard/overview/moderation-queue'
 import { RecentActivity } from '@/components/dashboard/overview/recent-activity'
 import { getSession } from '@/lib/auth'
@@ -23,6 +24,8 @@ export default async function OverviewPage() {
           Monitor and manage your platform with ease
         </p>
       </header>
+
+      <RefundsOwedAlert />
 
       <OverviewStats />
 

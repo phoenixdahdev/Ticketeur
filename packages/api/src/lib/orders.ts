@@ -27,6 +27,12 @@ import {
   PAYMENT_CURRENCY,
   toFlutterwaveAmount,
 } from './payment-amount'
+import {
+  chargeAmountMinor,
+  recordDiscrepancy,
+  recordDiscrepancyStandalone,
+  type DiscrepancyInput,
+} from './payment-discrepancies'
 import { generateAndStoreTicketsPdf, ticketUrl } from './tickets-pdf'
 
 // Re-exported so callers get the whole order/fulfillment surface from one
@@ -273,6 +279,36 @@ function assessCharge(
   return { ok: true, overpaidMinor: paid.overpaidMinor }
 }
 
+// The identifying half of a payment_discrepancies row: who paid, against
+// which order, with which Flutterwave charge, and for how much. Each branch
+// below adds only `kind`, `owedMinor`, `reason` and `detail`.
+//
+// Everything here is copied, not referenced. orders.flw_transaction_id in
+// particular is overwritten when an order goes failed → paid, so a rejected
+// charge's id survives only on its own record.
+function discrepancyFacts(
+  order: OrderRow,
+  charge: VerifiedCharge
+): Omit<DiscrepancyInput, 'kind' | 'owedMinor' | 'reason' | 'detail'> {
+  return {
+    orderId: order.id,
+    orderType: order.type,
+    eventId: order.eventId,
+    buyerEmail: order.buyerEmail,
+    buyerName: order.buyerName,
+    flwTxRef: order.flwTxRef,
+    flwTransactionId: String(charge.id),
+    // What checkout asked Flutterwave to charge (whole naira, in kobo) —
+    // the figure the charge was actually assessed against, not totalMinor.
+    expectedMinor: toFlutterwaveAmount(order.totalMinor) * 100,
+    paidMinor: chargeAmountMinor(charge.amount),
+    paidCurrency:
+      typeof charge.currency === 'string'
+        ? charge.currency.toUpperCase()
+        : '',
+  }
+}
+
 // Idempotent: if the order is already paid it's a no-op.
 //
 // Every path that marks an order paid comes through here — the FW webhook,
@@ -302,6 +338,49 @@ export async function fulfillOrder({
   orderId: string
   charge: VerifiedCharge
 }): Promise<FulfillOrderResult | null> {
+  // Hand-off from runFulfilment, which fills `order` in once the charge has
+  // been checked and found to pay for this order. Plain JS state, so it
+  // survives the transaction rolling back — and a rollback after that point
+  // is precisely the known hole: the tier sold out between payment and
+  // minting (or the order couldn't be delivered at all), so the buyer is
+  // charged, holds nothing, and the order is left as it was. This catch is
+  // the only place left that can write that down, because everything inside
+  // the transaction is gone.
+  const assessed: { order: OrderRow | null } = { order: null }
+
+  try {
+    return await runFulfilment(orderId, charge, assessed)
+  } catch (err) {
+    const order = assessed.order
+    if (order) {
+      // Own transaction (the fulfilment one is rolled back), idempotent on
+      // (order, charge, kind) — the reconciliation job re-presents this same
+      // charge every 15 minutes for 48 hours and must not pile up records.
+      // Never throws, so the caller still sees the real error below: the
+      // webhook refuses with a 4xx, the return page shows "processing", the
+      // reconciliation job counts an error. Unchanged, all of them.
+      await recordDiscrepancyStandalone({
+        ...discrepancyFacts(order, charge),
+        kind: 'undelivered',
+        owedMinor: chargeAmountMinor(charge.amount),
+        reason:
+          err instanceof OrderNotFulfillableError
+            ? err.reason
+            : 'fulfilment_failed',
+        detail: err instanceof Error ? err.message.slice(0, 500) : '',
+      })
+    }
+    throw err
+  }
+}
+
+// fulfillOrder's transaction. Split out only so fulfillOrder can wrap it: the
+// locking, the charge assessment and the delivery below are unchanged.
+async function runFulfilment(
+  orderId: string,
+  charge: VerifiedCharge,
+  assessed: { order: OrderRow | null }
+): Promise<FulfillOrderResult | null> {
   const flwTransactionId = String(charge.id)
 
   return db.transaction(async (tx): Promise<FulfillOrderResult | null> => {
@@ -335,6 +414,24 @@ export async function fulfillOrder({
           amount: charge.amount,
           currency: charge.currency,
         })
+        // Only when the charge carries this order's own tx_ref: one that
+        // doesn't says nothing about this order's payment, exactly as in
+        // assessCharge. The whole second charge is owed back — the order was
+        // already paid in full by another one.
+        //
+        // This branch is reached on *every* repeat of that charge (webhook
+        // retries, the return page, every reconciliation run), so the row
+        // lock gives no protection here at all; the unique index on
+        // (order, charge, kind) is what makes it one record.
+        if (order.flwTxRef && charge.tx_ref === order.flwTxRef) {
+          await recordDiscrepancy(tx, {
+            ...discrepancyFacts(order, charge),
+            kind: 'duplicate_charge',
+            owedMinor: chargeAmountMinor(charge.amount),
+            reason: 'already_paid',
+            detail: `Order was already paid by transaction ${order.flwTransactionId}.`,
+          })
+        }
       }
       return { outcome: 'already_paid', order, justFulfilled: false }
     }
@@ -407,6 +504,23 @@ export async function fulfillOrder({
         expected: rejection.expected,
         received: rejection.received,
       })
+      // `status = 'failed' AND flw_transaction_id IS NOT NULL` finds these by
+      // query, but only until the buyer pays properly: fulfilling from
+      // 'failed' overwrites flw_transaction_id with the good charge's id and
+      // the rejected one — money we are still holding — disappears from the
+      // row entirely. It also carries no amounts, no detected-at and nowhere
+      // to say the refund was made, so an admin would re-work it forever.
+      // Hence its own record, the same as an overpayment's.
+      if (chargeIsForThisOrder) {
+        await recordDiscrepancy(tx, {
+          ...discrepancyFacts(order, charge),
+          kind: 'rejected_charge',
+          // Nothing was delivered, so the whole charge is owed back.
+          owedMinor: chargeAmountMinor(charge.amount),
+          reason: rejection.reason,
+          detail: '',
+        })
+      }
       return {
         outcome: 'rejected',
         order: current,
@@ -417,6 +531,12 @@ export async function fulfillOrder({
 
     // Only a charge that pays for this order gets here, whatever its type:
     // the type decides what is delivered, never whether the charge is checked.
+    //
+    // Recorded before anything is delivered, because this is the last point
+    // at which we know the money is good: from here on a throw rolls the
+    // whole transaction back, and fulfillOrder's catch reads this to write
+    // the charge down as paid-but-undelivered.
+    assessed.order = order
     const credit = await deliverOrder(tx, order, flwTransactionId)
 
     const paidAt = new Date()
@@ -427,6 +547,9 @@ export async function fulfillOrder({
 
     // Paid from 'failed' after an earlier charge was rejected: that charge's
     // id has just been overwritten above, and it still needs refunding.
+    // That earlier charge already has its own 'rejected_charge' record from
+    // the branch above, written when it was rejected — which is the reason
+    // that record exists, since its id is gone from the row as of this line.
     if (
       order.flwTransactionId !== null &&
       order.flwTransactionId !== flwTransactionId
@@ -446,6 +569,19 @@ export async function fulfillOrder({
         requestedAmount: toFlutterwaveAmount(order.totalMinor),
         paidAmount: charge.amount,
         overpaidMinor: assessment.overpaidMinor,
+      })
+      // Only the excess is owed: the buyer keeps what they bought. Written in
+      // this transaction, so it commits with the fulfilment it describes and
+      // no crash can land one without the other — but inside a SAVEPOINT, so
+      // a failure here rolls back only itself and the buyer is still served
+      // (see recordDiscrepancy). Reached only on the pending→paid transition,
+      // which the row lock lets exactly one caller take.
+      await recordDiscrepancy(tx, {
+        ...discrepancyFacts(order, charge),
+        kind: 'overpayment',
+        owedMinor: assessment.overpaidMinor,
+        reason: 'overpaid',
+        detail: '',
       })
     }
 

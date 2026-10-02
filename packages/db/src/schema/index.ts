@@ -56,3 +56,10 @@ export type {
   SubmissionAnswerValue,
   SubmissionAnswers,
 } from './forms'
+export {
+  platformSettings,
+  platformFeeChanges,
+  platformSettingsRelations,
+  platformFeeChangesRelations,
+  PLATFORM_SETTINGS_ROW_ID,
+} from './platform-settings'

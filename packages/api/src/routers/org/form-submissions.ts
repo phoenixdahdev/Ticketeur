@@ -2,7 +2,13 @@ import { TRPCError } from '@trpc/server'
 import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm'
 import { z } from 'zod'
 
-import { formFields, formPriceOptions, submissions, user } from '@ticketur/db'
+import {
+  formFields,
+  formPriceOptions,
+  orders,
+  submissions,
+  user,
+} from '@ticketur/db'
 
 import { createTRPCRouter, organizerProcedure } from '../../trpc'
 import { getBaseUrl } from '../../lib/base-url'
@@ -19,6 +25,11 @@ import {
 } from '../../lib/form-emails'
 import { buildSubmissionExport } from '../../lib/form-fields'
 import { feeOutstanding } from '../../lib/form-payments'
+import {
+  clearRejectionRefund,
+  loadPaidRegistrationFee,
+  recordRejectionRefund,
+} from '../../lib/form-refunds'
 import { claimFormSpot, FormSpotError, releaseFormSpot } from '../../lib/forms'
 
 const statusFilter = z.enum([
@@ -157,35 +168,53 @@ export const orgFormSubmissionsRouter = createTRPCRouter({
       if (!found || !managesEvent(ctx, found.organizerId)) return null
       const { submission, form } = found
 
-      const [fields, priceOptionRows, reviewerRows] = await Promise.all([
-        ctx.db
-          .select({
-            id: formFields.id,
-            label: formFields.label,
-            type: formFields.type,
-          })
-          .from(formFields)
-          .where(eq(formFields.formId, form.id))
-          .orderBy(asc(formFields.position), asc(formFields.id)),
-        submission.priceOptionId
-          ? ctx.db
-              .select({
-                id: formPriceOptions.id,
-                name: formPriceOptions.name,
-                priceMinor: formPriceOptions.priceMinor,
-              })
-              .from(formPriceOptions)
-              .where(eq(formPriceOptions.id, submission.priceOptionId))
-              .limit(1)
-          : Promise.resolve([]),
-        submission.reviewerId
-          ? ctx.db
-              .select({ id: user.id, name: user.name })
-              .from(user)
-              .where(eq(user.id, submission.reviewerId))
-              .limit(1)
-          : Promise.resolve([]),
-      ])
+      const [fields, priceOptionRows, reviewerRows, orderRows] =
+        await Promise.all([
+          ctx.db
+            .select({
+              id: formFields.id,
+              label: formFields.label,
+              type: formFields.type,
+            })
+            .from(formFields)
+            .where(eq(formFields.formId, form.id))
+            .orderBy(asc(formFields.position), asc(formFields.id)),
+          submission.priceOptionId
+            ? ctx.db
+                .select({
+                  id: formPriceOptions.id,
+                  name: formPriceOptions.name,
+                  priceMinor: formPriceOptions.priceMinor,
+                })
+                .from(formPriceOptions)
+                .where(eq(formPriceOptions.id, submission.priceOptionId))
+                .limit(1)
+            : Promise.resolve([]),
+          submission.reviewerId
+            ? ctx.db
+                .select({ id: user.id, name: user.name })
+                .from(user)
+                .where(eq(user.id, submission.reviewerId))
+                .limit(1)
+            : Promise.resolve([]),
+          // Whether the fee is actually with us, which is what decides whether
+          // rejecting owes a refund. An orderId on its own does not say: it is
+          // set the moment the application is created, long before anything is
+          // paid.
+          submission.orderId
+            ? ctx.db
+                .select({
+                  status: orders.status,
+                  totalMinor: orders.totalMinor,
+                  paidAt: orders.paidAt,
+                })
+                .from(orders)
+                .where(eq(orders.id, submission.orderId))
+                .limit(1)
+            : Promise.resolve([]),
+        ])
+
+      const order = orderRows[0]
 
       return {
         submission: {
@@ -205,6 +234,13 @@ export const orgFormSubmissionsRouter = createTRPCRouter({
         priceOption: priceOptionRows[0] ?? null,
         // Null until reviewed, and for an auto-approved submission.
         reviewer: reviewerRows[0] ?? null,
+        // The fee the applicant has actually paid, in minor units — null on a
+        // free application and on one whose payment never cleared. Non-null
+        // means rejecting owes this much back, which is what the reject
+        // dialog tells the organizer.
+        feePaidMinor:
+          order && order.status === 'paid' ? order.totalMinor : null,
+        feePaidAt: order?.paidAt ?? null,
         // null = unanswered (an optional field, or one added after this
         // submission came in). Upload answers are object-storage URLs.
         answers: fields.map((field) => ({
@@ -271,6 +307,10 @@ export const orgFormSubmissionsRouter = createTRPCRouter({
   // under the same capacity guard as intake). Approving an approved
   // submission is a no-op reported as `changed: false`. The applicant is
   // emailed when it changes.
+  //
+  // Re-approving a paid application that was rejected also withdraws the
+  // refund obligation the rejection recorded — unless an admin has already
+  // paid it back, which refuses the approval (lib/form-refunds.ts says why).
   approve: organizerProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
@@ -349,6 +389,24 @@ export const orgFormSubmissionsRouter = createTRPCRouter({
               })
             }
           }
+
+          // The rejection may have put this fee on the Refunds Owed screen.
+          // Taking the application back takes the obligation back with it —
+          // nothing is owed to someone who holds what they paid for.
+          const refund = await clearRejectionRefund(tx, current.orderId)
+          if (refund.state === 'refunded') {
+            // The money has already gone back to them. Approving now would
+            // hand out a spot that nobody is paying for — the same hole
+            // feeOutstanding closes above, arrived at from the other side.
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message:
+                "This application's fee has already been refunded, so it can't be approved. Ask the applicant to apply and pay again.",
+            })
+          }
+          // 'unknown' means the bookkeeping read failed, not that anything is
+          // wrong with the application. clearRejectionRefund has logged it;
+          // the approval goes ahead rather than being blocked by it.
         }
 
         const now = new Date()
@@ -377,10 +435,15 @@ export const orgFormSubmissionsRouter = createTRPCRouter({
   // submission's spot is released for someone else. Rejecting a rejected
   // submission is a no-op reported as `changed: false`. The applicant is
   // emailed the reason when it changes.
+  //
+  // When the fee was PAID, the money goes back: the rejection records a
+  // refund obligation on the Refunds Owed screen for an admin to issue by hand
+  // (lib/form-refunds.ts). Nothing refunds automatically, and that write can
+  // never fail the rejection — the organizer's decision stands either way.
   reject: organizerProcedure
     .input(rejectInput)
     .mutation(async ({ ctx, input }) => {
-      const { submission } = await requireOwnedSubmission(ctx, input.id)
+      const { submission, form } = await requireOwnedSubmission(ctx, input.id)
       const reviewerId = ctx.session.user.id
 
       const changed = await ctx.db.transaction(async (tx) => {
@@ -389,6 +452,8 @@ export const orgFormSubmissionsRouter = createTRPCRouter({
             status: submissions.status,
             formId: submissions.formId,
             priceOptionId: submissions.priceOptionId,
+            orderId: submissions.orderId,
+            reference: submissions.reference,
           })
           .from(submissions)
           .where(eq(submissions.id, submission.id))
@@ -418,11 +483,24 @@ export const orgFormSubmissionsRouter = createTRPCRouter({
             updatedAt: now,
           })
           .where(eq(submissions.id, submission.id))
+
+        // The paid path. Only a fee that actually cleared is owed back: a
+        // free application has no order, and an unpaid one is refused above
+        // (and released by lib/form-payments.ts, not here). Written inside
+        // this transaction so the obligation commits with the rejection that
+        // created it — but through a SAVEPOINT that never throws, so if it
+        // fails the rejection still commits. Last, so it holds no lock any
+        // longer than it must.
+        const fee = await loadPaidRegistrationFee(tx, current.orderId)
+        if (fee) {
+          await recordRejectionRefund(tx, {
+            fee,
+            submission: { id: submission.id, reference: current.reference },
+            formTitle: form.title,
+          })
+        }
         return true
       })
-
-      // PAID PATH SEAM: rejecting a submission whose fee was paid (orderId
-      // set) may owe the applicant a refund. Nothing is refunded here.
 
       // Outside the transaction, once the rejection has committed.
       if (changed) await sendSubmissionRejected(submission.id)

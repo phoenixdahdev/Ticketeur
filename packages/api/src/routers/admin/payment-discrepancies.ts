@@ -25,6 +25,7 @@ const KINDS = [
   'rejected_charge',
   'duplicate_charge',
   'undelivered',
+  'registration_rejected',
 ] as const satisfies readonly PaymentDiscrepancyKind[]
 
 const STATUSES = ['open', 'resolved'] as const

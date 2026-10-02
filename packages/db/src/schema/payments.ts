@@ -18,11 +18,16 @@ import type { OrderType } from './events'
 // and left something unsettled; each one is a refund a person has to issue by
 // hand in the Flutterwave dashboard, and then record here.
 //
-// Written only from fulfillOrder (packages/api/src/lib/orders.ts), which is
-// the single path every payment goes through — the FW webhook, the
+// Written from fulfillOrder (packages/api/src/lib/orders.ts), which is the
+// single path every payment goes through — the FW webhook, the
 // /checkout/return page and the 15-minute reconciliation job all call it.
 // Before this table existed each of these was a console.error and nothing
 // else: logs expire, so the money became unfindable.
+//
+// And from one place outside fulfilment: the organizer rejecting a
+// registration whose fee was paid (packages/api/src/lib/form-refunds.ts). That
+// money arrived cleanly and was earned at the time; what makes it owed back is
+// a decision taken later, which is why it cannot be detected at payment time.
 
 export type PaymentDiscrepancyKind =
   // The charge paid more than the order asked for. Flutterwave's guidance is
@@ -42,6 +47,15 @@ export type PaymentDiscrepancyKind =
   // type with no fulfilment yet, a registration fee whose submission is gone.
   // The buyer is charged and holds nothing, so the whole charge is owed back.
   | 'undelivered'
+  // A registration fee that was paid and delivered, and then taken away: the
+  // organizer rejected the application. The applicant paid to be considered
+  // and holds nothing, so the whole fee is owed back. The only kind written
+  // outside fulfilment — see packages/api/src/lib/form-refunds.ts, which the
+  // organizer's reject calls. Deliberately its own kind rather than
+  // 'undelivered': nothing failed and nothing rolled back, and an admin acting
+  // on 'undelivered' advice ("unless the order is delivered by hand instead")
+  // would be re-approving an application the organizer turned down.
+  | 'registration_rejected'
 
 // Resolution is an explicit human action. Nothing in this codebase moves a row
 // to 'resolved' on its own — refunds happen by hand in Flutterwave and an

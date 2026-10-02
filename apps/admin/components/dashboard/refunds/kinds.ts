@@ -8,6 +8,7 @@ export const DISCREPANCY_KINDS = [
   'rejected_charge',
   'duplicate_charge',
   'undelivered',
+  'registration_rejected',
 ] as const satisfies readonly DiscrepancyKind[]
 
 export const KIND_LABEL: Record<DiscrepancyKind, string> = {
@@ -15,6 +16,7 @@ export const KIND_LABEL: Record<DiscrepancyKind, string> = {
   rejected_charge: 'Paid, not covered',
   duplicate_charge: 'Paid twice',
   undelivered: 'Paid, not delivered',
+  registration_rejected: 'Application rejected',
 }
 
 // One line stating what the customer is holding right now. An admin reading
@@ -28,6 +30,8 @@ export const KIND_SUMMARY: Record<DiscrepancyKind, string> = {
     'This order had already been paid by a different charge. This one bought nothing, so the whole charge is owed back.',
   undelivered:
     'The charge paid for this order, but it could not be delivered and the fulfilment was rolled back. The customer holds nothing, so the whole charge is owed back — unless the order is delivered by hand instead.',
+  registration_rejected:
+    'The applicant paid this registration fee in full, and the organizer then rejected their application and released the spot. They paid to take part and are not taking part, so the whole fee is owed back. Refund it in Flutterwave and record it here.',
 }
 
 // Whether the customer received what they paid for. Drives the red/amber
@@ -38,6 +42,7 @@ export const KIND_SEVERITY: Record<DiscrepancyKind, 'warning' | 'danger'> = {
   rejected_charge: 'danger',
   duplicate_charge: 'danger',
   undelivered: 'danger',
+  registration_rejected: 'danger',
 }
 
 // Why the charge was recorded, as stored in `reason`.
@@ -50,6 +55,8 @@ export const REASON_LABEL: Record<string, string> = {
   unsupported_type: 'This kind of order has no fulfilment yet',
   submission_missing: 'The application this fee pays for no longer exists',
   fulfilment_failed: 'Fulfilment failed after the payment was accepted',
+  application_rejected:
+    'The organizer rejected the application this fee paid for',
 }
 
 export function reasonLabel(reason: string): string {

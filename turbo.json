@@ -19,6 +19,7 @@
     "FLW_PUBLIC_KEY",
     "FLW_SECRET_KEY",
     "FLW_SECRET_HASH",
+    "CRON_SECRET",
     "AXIOM_TOKEN",
     "AXIOM_DATASET",
     "AXIOM_HOST"

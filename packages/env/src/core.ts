@@ -38,6 +38,12 @@ export const env = createEnv({
     FLW_PUBLIC_KEY: z.string().optional(),
     FLW_SECRET_KEY: z.string().optional(),
     FLW_SECRET_HASH: z.string().optional(),
+    // Shared by the web app and the Trigger.dev worker: the worker's scheduled
+    // `reconcile-pending-orders` task sends it as a bearer token to the web
+    // app's /api/cron/reconcile-orders. The route enforces a minimum length
+    // rather than this schema, so a malformed value fails that one route
+    // closed instead of every consumer of this module on import.
+    CRON_SECRET: z.string().optional(),
     // Axiom observability (OpenTelemetry traces + structured logs). Optional
     // so local dev and CI builds without Axiom configured are a graceful no-op.
     AXIOM_TOKEN: z.string().optional(),

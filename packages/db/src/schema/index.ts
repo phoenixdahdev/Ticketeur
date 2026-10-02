@@ -25,6 +25,7 @@ export type {
   EventVendorStatus,
   ExternalVendorInviteStatus,
   OrderStatus,
+  OrderType,
   ActivityType,
   ReportSubjectType,
   ReportStatus,

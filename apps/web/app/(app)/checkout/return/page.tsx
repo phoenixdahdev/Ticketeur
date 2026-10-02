@@ -76,34 +76,39 @@ export default async function CheckoutReturnPage({
 
   // Belt-and-braces: the webhook should have already fulfilled this order, but
   // if the user beat it back we re-verify and fulfill here. Idempotent — only
-  // the pending→paid transition fires the email + PDF.
+  // the pending→paid transition fires the email + PDF. fulfillOrder checks the
+  // verified charge's amount and currency itself, exactly as for the webhook;
+  // a charge that doesn't pay for the order leaves it 'failed' (handled below).
   if (order.status !== 'paid' && transactionId) {
-    const tx = await verifyTransaction(transactionId)
-    if (tx && tx.status === 'successful' && tx.tx_ref === txRef) {
-      try {
-        const result = await fulfillOrder({
-          orderId: order.id,
-          flwTransactionId: String(tx.id),
-        })
+    try {
+      const tx = await verifyTransaction(transactionId)
+      if (tx && tx.status === 'successful' && tx.tx_ref === txRef) {
+        const result = await fulfillOrder({ orderId: order.id, charge: tx })
         if (result?.justFulfilled) {
           await notifyOrderFulfilled({ orderId: order.id, baseUrl: getBaseUrl() })
         }
-      } catch (err) {
-        // The webhook still retries this order, but a buyer parked on the
-        // processing screen needs a cause we can look up.
-        console.error('[checkout] return-page fulfillment failed', {
-          orderId: order.id,
-          txRef,
-          flwTransactionId: String(tx.id),
-          error: err,
-        })
-        // fall through — show the processing screen
       }
+    } catch (err) {
+      // The webhook still retries this order, but a buyer parked on the
+      // processing screen needs a cause we can look up. Covers the verify call
+      // too, which previously threw out of the page on a gateway error.
+      console.error('[checkout] return-page fulfillment failed', {
+        orderId: order.id,
+        txRef,
+        transactionId,
+        error: err,
+      })
+      // fall through — show the processing screen
     }
   }
 
   const head = await loadOrderById(order.id)
   if (!head) return <FailedScreen reason="missing" />
+  // 'failed': a verified charge did not pay for the order, or the payment
+  // itself failed. Either way nothing is still processing.
+  if (head.order.status === 'failed') {
+    return <FailedScreen reason="unconfirmed" reference={orderRef(order.id)} />
+  }
   if (head.order.status !== 'paid') return <ProcessingScreen orderId={order.id} />
 
   const items = await loadOrderItems(order.id)
@@ -277,15 +282,19 @@ function ProcessingScreen({ orderId }: { orderId: string }) {
 
 function FailedScreen({
   reason,
+  reference,
 }: {
-  reason: 'cancelled' | 'failed' | 'missing'
+  reason: 'cancelled' | 'failed' | 'missing' | 'unconfirmed'
+  reference?: string
 }) {
   const message =
     reason === 'cancelled'
       ? 'Looks like you cancelled the payment. No charge was made.'
       : reason === 'missing'
         ? "We couldn't find that order — the link may have expired."
-        : 'Your payment did not go through. Please try again or use a different card.'
+        : reason === 'unconfirmed'
+          ? `We couldn't confirm a payment that covers this order, so no tickets were issued. If you were charged, contact support${reference ? ` and quote order ${reference}` : ''} so we can put it right.`
+          : 'Your payment did not go through. Please try again or use a different card.'
   return (
     <section className="mx-auto flex w-full max-w-180 flex-col items-center gap-6 px-6 py-20 text-center md:py-28">
       <p className="text-destructive text-xs font-bold tracking-[0.2em] uppercase">

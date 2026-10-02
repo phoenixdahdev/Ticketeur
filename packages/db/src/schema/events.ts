@@ -196,6 +196,11 @@ export const externalVendorInvitesRelations = relations(
 export type OrderStatus =
   'pending' | 'paid' | 'refunded' | 'cancelled' | 'failed'
 
+// What an order pays for. 'ticket' orders carry their lines in order_items;
+// the others point at the row they pay for through orders.referenceId.
+export type OrderType =
+  'ticket' | 'registration_fee' | 'vendor_fee' | 'vote_purchase'
+
 export const orders = pgTable(
   'orders',
   {
@@ -206,6 +211,14 @@ export const orders = pgTable(
         onDelete: 'cascade',
         onUpdate: 'cascade',
       }),
+    // Every order placed before this column existed was a ticket order, so
+    // 'ticket' is the default and the migration backfills them to it.
+    type: text('type').$type<OrderType>().notNull().default('ticket'),
+    // Points to the row `type` says the order pays for: a form submission for
+    // 'registration_fee', a contest entry for 'vote_purchase'. NULL for
+    // 'ticket' orders, whose lines live in order_items.
+    // Not declared as a real FK because it's polymorphic.
+    referenceId: text('reference_id'),
     // Legacy single-tier pointer. Nullable since a multi-tier order carries
     // its lines in `order_items` instead; kept (and backfilled) so existing
     // single-tier orders still resolve a tier. New orders leave this null.
@@ -246,7 +259,9 @@ export const orders = pgTable(
       >(),
     status: text('status').$type<OrderStatus>().notNull().default('pending'),
     // Flutterwave correlation — tx_ref is what we send, transaction_id is
-    // what FW returns once the customer pays.
+    // what FW returns once the customer pays. On a 'failed' order a
+    // transaction_id is the charge fulfilment rejected (underpaid or wrong
+    // currency) and still needs a refund; see fulfillOrder.
     flwTxRef: text('flw_tx_ref'),
     flwTransactionId: text('flw_transaction_id'),
     ticketsPdfUrl: text('tickets_pdf_url'),
@@ -258,6 +273,7 @@ export const orders = pgTable(
     index('orders_buyer_idx').on(t.buyerId),
     index('orders_flw_tx_ref_idx').on(t.flwTxRef),
     index('orders_buyer_email_idx').on(t.buyerEmail),
+    index('orders_reference_idx').on(t.type, t.referenceId),
   ]
 )
 

@@ -70,6 +70,12 @@ export function FormApply({
   const signedIn = Boolean(session.data?.user) || signedInHere
   const applicantEmail = session.data?.user?.email ?? null
 
+  // send() is resumed from a timeout once the dialog closes, so it would
+  // otherwise read the `signedIn` of the render that opened the dialog —
+  // false — and open it all over again.
+  const signedInRef = useRef(signedIn)
+  signedInRef.current = signedIn
+
   const [answers, setAnswers] = useState<AnswerDraft>({})
   const [priceOptionId, setPriceOptionId] = useState<string | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -251,19 +257,31 @@ export function FormApply({
 
   const sending = submit.isPending || leaving
 
+  // Tapping submit while the last photo is at 90% should not be refused: the
+  // applicant has done their part. The submit waits for the upload instead,
+  // and the button says so.
+  const [waitingForUploads, setWaitingForUploads] = useState(false)
+  const sendRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    if (!waitingForUploads || uploading) return
+    setWaitingForUploads(false)
+    sendRef.current()
+  }, [waitingForUploads, uploading])
+
   function send() {
     setFormError(null)
     const validated = check()
-    if (!validated) return
-
-    if (uploading) {
-      setFormError(
-        'Your files are still uploading. Give them a moment and try again.'
-      )
+    if (!validated) {
+      setWaitingForUploads(false)
       return
     }
 
-    if (!signedIn) {
+    if (uploading) {
+      setWaitingForUploads(true)
+      return
+    }
+
+    if (!signedInRef.current) {
       // Saved before the dialog opens, so even the paths that do navigate
       // (creating an account, 2FA) can't cost them anything.
       saveNow()
@@ -279,10 +297,12 @@ export function FormApply({
       answers: validated,
     })
   }
+  sendRef.current = send
 
   function handleSignedIn() {
     setSigninOpen(false)
     setSignedInHere(true)
+    signedInRef.current = true
     // The header is server-rendered from the session.
     router.refresh()
     const intent = intentRef.current
@@ -485,7 +505,7 @@ export function FormApply({
               type="submit"
               size="xl"
               className="w-full"
-              disabled={sending || uploading}
+              disabled={sending || waitingForUploads}
             >
               {leaving ? (
                 <>
@@ -497,7 +517,7 @@ export function FormApply({
                   <Spinner />
                   Sending your application…
                 </>
-              ) : uploading ? (
+              ) : waitingForUploads ? (
                 <>
                   <Spinner />
                   Waiting for your files…

@@ -139,6 +139,7 @@ export function FormFieldInput({
       return (
         <FormUploadField
           field={field}
+          controlId={controlId}
           value={value}
           onChange={onChange}
           invalid={invalid}

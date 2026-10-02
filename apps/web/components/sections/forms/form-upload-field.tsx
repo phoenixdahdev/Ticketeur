@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { HugeiconsIcon } from '@hugeicons/react'
 import {
   Alert02Icon,
@@ -65,6 +65,9 @@ function asUrlList(value: unknown): string[] {
 
 export function FormUploadField({
   field,
+  // The id the question's <label> points at, so tapping the label opens the
+  // picker and the form can focus this field when it reports an error.
+  controlId,
   value,
   onChange,
   invalid,
@@ -75,6 +78,7 @@ export function FormUploadField({
   disabled,
 }: {
   field: PublicField
+  controlId: string
   value: unknown
   onChange: (next: string | string[] | undefined) => void
   invalid: boolean
@@ -88,7 +92,6 @@ export function FormUploadField({
   onBusyChange: (busy: boolean) => void
   disabled?: boolean
 }) {
-  const inputId = useId()
   const accepted = field.acceptedFileTypes ?? []
   const multiple = field.type === 'images'
   const maxFiles = multiple ? (field.maxFiles ?? 5) : 1
@@ -109,6 +112,9 @@ export function FormUploadField({
   onChangeRef.current = onChange
   const committedRef = useRef(committed)
   committedRef.current = committed
+
+  const pendingRef = useRef(pending)
+  pendingRef.current = pending
 
   const uploading = pending.some((p) => p.status === 'uploading')
   const busyChangeRef = useRef(onBusyChange)
@@ -205,16 +211,16 @@ export function FormUploadField({
   runUploadRef.current = runUpload
   useEffect(() => {
     if (!signedIn) return
-    setPending((items) => {
-      const blocked = items.filter((p) => p.status === 'blocked')
-      if (blocked.length === 0) return items
-      for (const item of blocked) {
-        void runUploadRef.current(item.key)
-      }
-      return items.map((p) =>
+    const blocked = pendingRef.current.filter((p) => p.status === 'blocked')
+    if (blocked.length === 0) return
+    setPending((items) =>
+      items.map((p) =>
         p.status === 'blocked' ? { ...p, status: 'uploading', error: null } : p
       )
-    })
+    )
+    // Started outside the updater: React runs an updater twice in
+    // development, and an upload is not something to do twice.
+    for (const item of blocked) void runUploadRef.current(item.key)
   }, [signedIn])
 
   function addFiles(picked: File[]) {
@@ -309,7 +315,7 @@ export function FormUploadField({
     <div className="flex flex-col gap-3">
       <input
         ref={inputRef}
-        id={inputId}
+        id={controlId}
         type="file"
         className="sr-only"
         accept={acceptAttribute(accepted)}
@@ -330,6 +336,7 @@ export function FormUploadField({
           onRemoveCommitted={removeCommitted}
           onRemovePending={removePending}
           onRetry={(key) => void runUpload(key)}
+          onSignin={onRequestSignin}
         />
       ) : (
         <div className="grid grid-cols-3 gap-3 sm:grid-cols-4">
@@ -381,7 +388,7 @@ export function FormUploadField({
                 />
               )}
 
-              <PendingOverlay item={item} />
+              <PendingOverlay item={item} onSignin={onRequestSignin} />
 
               <RemoveButton
                 label={
@@ -469,14 +476,18 @@ export function FormUploadField({
       ) : null}
 
       {pending.some((p) => p.status === 'blocked') ? (
-        <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
+        <button
+          type="button"
+          onClick={onRequestSignin}
+          className="text-muted-foreground hover:text-foreground flex w-fit items-center gap-1.5 text-xs"
+        >
           <HugeiconsIcon
             icon={SquareLock02Icon}
             className="size-3.5 shrink-0"
             strokeWidth={1.8}
           />
-          Waiting for you to sign in — nothing is lost.
-        </p>
+          Waiting for you to sign in — nothing is lost. Sign in
+        </button>
       ) : null}
 
       <p className="text-muted-foreground text-xs">
@@ -487,7 +498,13 @@ export function FormUploadField({
   )
 }
 
-function PendingOverlay({ item }: { item: Pending }) {
+function PendingOverlay({
+  item,
+  onSignin,
+}: {
+  item: Pending
+  onSignin: () => void
+}) {
   if (item.status === 'uploading') {
     return (
       <div className="absolute inset-x-1.5 bottom-1.5 flex flex-col gap-1">
@@ -499,10 +516,15 @@ function PendingOverlay({ item }: { item: Pending }) {
     )
   }
   if (item.status === 'blocked') {
+    // Dismissing the dialog shouldn't strand the file: this is the way back.
     return (
-      <span className="bg-foreground/80 text-background absolute inset-x-1 bottom-1 rounded-lg py-1 text-center text-[10px] font-semibold">
+      <button
+        type="button"
+        onClick={onSignin}
+        className="bg-foreground/80 text-background absolute inset-x-1 bottom-1 rounded-lg py-1 text-center text-[10px] font-semibold"
+      >
         Sign in to upload
-      </span>
+      </button>
     )
   }
   return null
@@ -540,12 +562,14 @@ function PdfList({
   onRemoveCommitted,
   onRemovePending,
   onRetry,
+  onSignin,
 }: {
   committed: string[]
   pending: Pending[]
   onRemoveCommitted: (url: string) => void
   onRemovePending: (key: string) => void
   onRetry: (key: string) => void
+  onSignin: () => void
 }) {
   if (committed.length === 0 && pending.length === 0) return null
   return (
@@ -629,9 +653,13 @@ function PdfList({
             <Progress value={item.progress} className="h-1.5" />
           ) : null}
           {item.status === 'blocked' ? (
-            <p className="text-muted-foreground text-xs">
-              Waiting for you to sign in.
-            </p>
+            <button
+              type="button"
+              onClick={onSignin}
+              className="text-primary w-fit text-xs font-semibold underline underline-offset-4"
+            >
+              Sign in to upload this
+            </button>
           ) : null}
         </li>
       ))}

@@ -59,7 +59,7 @@ export function CreateEventContent() {
 
   const create = useMutation(
     trpc.org.events.create.mutationOptions({
-      onSuccess: ({ id }, variables) => {
+      onSuccess: ({ id, status }) => {
         queryClient.invalidateQueries({
           queryKey: trpc.org.events.list.queryKey(),
         })
@@ -70,7 +70,10 @@ export function CreateEventContent() {
           queryKey: trpc.org.dashboard.recentActivity.queryKey(),
         })
 
-        if (variables.status === 'draft') {
+        // The server decides the status it was saved with — asking to go
+        // live does not make it live — so follow what came back, not what
+        // was sent.
+        if (status === 'draft') {
           toast.success('Draft saved')
           router.push(`/org/events/${id}`)
         } else {

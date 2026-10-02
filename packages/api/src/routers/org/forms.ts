@@ -29,6 +29,7 @@ import {
   recordContentChange,
   unchangedReview,
 } from '../../lib/form-review'
+import { getFeeRates } from '../../lib/platform-settings'
 
 import { orgFormFieldsRouter } from './form-fields'
 import { orgFormPriceOptionsRouter } from './form-price-options'
@@ -88,8 +89,16 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 // ─── Review ────────────────────────────────────────────────────────────────
 
 // Where an organizer can send a form to the admin queue from: a draft, a
-// rejected form once fixed, or a closed one being reopened with changes.
-const SUBMITTABLE: FormStatus[] = ['draft', 'rejected', 'closed']
+// rejected form once fixed, a closed one being reopened with changes, or one
+// an admin took down and they have since fixed. A taken-down form is
+// submittable on purpose — it is the one and only route back, and it ends at
+// an admin approving it, so the takedown still holds.
+const SUBMITTABLE: FormStatus[] = [
+  'draft',
+  'rejected',
+  'closed',
+  'suspended',
+]
 
 function assertSubmittable(status: FormStatus): void {
   if (status === 'pending_review') {
@@ -115,6 +124,34 @@ function approvedAsIs(form: {
     form.approvedRevision !== null &&
     form.approvedRevision === form.contentRevision
   )
+}
+
+// Why a withdrawal was refused, in the organizer's terms. An approval that
+// landed first is the one worth naming: their form is live, not lost.
+function notAwaitingReview(status: FormStatus): TRPCError {
+  return new TRPCError({
+    code: 'BAD_REQUEST',
+    message:
+      status === 'published'
+        ? 'An admin approved this form while you were withdrawing it, so it is live now. Close it if you need it to stop taking applications.'
+        : status === 'rejected' || status === 'suspended'
+          ? 'An admin has already decided on this form. Read what they said, then submit it again.'
+          : 'This form is not waiting for review.',
+  })
+}
+
+// Reopening is for a form its organizer closed. A form an admin took down is
+// not one of those, and saying so plainly beats "only a closed form can be
+// reopened" when the organizer is staring at a form that was live this
+// morning.
+function notReopenable(status: FormStatus): TRPCError {
+  return new TRPCError({
+    code: 'BAD_REQUEST',
+    message:
+      status === 'suspended'
+        ? 'An admin took this form down, so it cannot be reopened. Deal with the reason they gave and submit it for review.'
+        : 'Only a closed form can be reopened.',
+  })
 }
 
 function changedSinceApproval(): TRPCError {
@@ -205,7 +242,7 @@ export const orgFormsRouter = createTRPCRouter({
       if (!found || !managesEvent(ctx, found.event.organizerId)) return null
       const { form, event } = found
 
-      const [fields, priceOptions, countRows] = await Promise.all([
+      const [fields, priceOptions, countRows, feeRates] = await Promise.all([
         ctx.db
           .select()
           .from(formFields)
@@ -220,6 +257,12 @@ export const orgFormsRouter = createTRPCRouter({
           .select(countColumns)
           .from(submissions)
           .where(eq(submissions.formId, form.id)),
+        // The registration service-fee rate travels with the prices it
+        // applies to, exactly as it does on public.forms.bySlug: the builder
+        // already makes this query, so the preview can show what an applicant
+        // will actually pay without a second round trip, and without a moment
+        // where a booth price is on screen beside no fee.
+        getFeeRates(ctx.db),
       ])
 
       return {
@@ -234,6 +277,11 @@ export const orgFormsRouter = createTRPCRouter({
         },
         fields,
         priceOptions,
+        // Basis points (500 = 5%). Apply it with calculateFeeMinor from
+        // ../../lib/fees, the function the charge itself is computed with.
+        // Display only: public.forms.submit re-reads the rate and that figure
+        // is the one the applicant is charged.
+        serviceFeeBps: feeRates.registration,
         counts: countRows[0] ?? {
           total: 0,
           pendingPayment: 0,
@@ -397,21 +445,76 @@ export const orgFormsRouter = createTRPCRouter({
       return { id: form.id, status: 'pending_review' as const }
     }),
 
+  // Pulls a form back out of the admin queue, to a draft, so the organizer can
+  // keep working on it instead of waiting. Only while it is actually awaiting
+  // review, and only for whoever manages the event (requireOwnedForm — its
+  // organizer, or an admin acting for them, the rule every procedure here
+  // uses).
+  //
+  // Withdrawing and an admin approving are the same race, from two sides, and
+  // they are guarded the same way: admin.moderation.approveForm's decision
+  // lives in its UPDATE's WHERE (`FORM_PENDING` and the revision it was
+  // shown), and this one's lives in its own (`status = 'pending_review'`).
+  // Both are single conditional UPDATEs against one row, so the row lock
+  // serialises them and the second to arrive re-evaluates its WHERE against
+  // the row the first left behind: one matches, the other matches nothing and
+  // says so. A withdrawal that lands first makes the approval a CONFLICT the
+  // admin sees; an approval that lands first leaves the form live and the
+  // organizer is told it is too late to withdraw. They can never both win, and
+  // a withdrawal can never silently discard an approval.
+  //
+  // It goes back to 'draft' rather than wherever it came from: a form awaiting
+  // review is offline either way, and a draft is the one state that says "mine
+  // again, not live, not queued". A form that was published before the edit
+  // that sent it back keeps its approvedRevision, so nothing about the old
+  // approval is lost — but it is not 'closed', so reopen still can't put it
+  // back live without a review.
+  withdraw: organizerProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { form } = await requireOwnedForm(ctx, input.id)
+      if (form.status !== 'pending_review') throw notAwaitingReview(form.status)
+
+      const updated = await ctx.db
+        .update(forms)
+        .set({
+          status: 'draft',
+          // Nothing is waiting for an admin any more; submitting again stamps
+          // a fresh time and puts it back at the end of the queue.
+          reviewRequestedAt: null,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(forms.id, form.id), eq(forms.status, 'pending_review')))
+        .returning({ id: forms.id })
+      if (updated.length === 0) {
+        // An admin decided while this was in flight.
+        const [current] = await ctx.db
+          .select({ status: forms.status })
+          .from(forms)
+          .where(eq(forms.id, form.id))
+          .limit(1)
+        if (!current) throw new TRPCError({ code: 'NOT_FOUND' })
+        throw notAwaitingReview(current.status)
+      }
+
+      return { id: form.id, status: 'draft' as const }
+    }),
+
   // Takes a closed form straight back to published, but only while its
   // content is still the revision an admin approved: reopening never puts an
   // unreviewed question live. A form edited since it closed reopens through
   // submit instead. (A form published before reviews existed has no approved
   // revision, so it goes through submit too.)
+  //
+  // This is the one path that puts a form live without an admin, so it is also
+  // the one a takedown has to survive. It does, twice over: 'suspended' is not
+  // 'closed', and takeDownForm clears approvedRevision, so even a suspended
+  // form that somehow reached 'closed' would fail the revision check below.
   reopen: organizerProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const { form, event } = await requireOwnedForm(ctx, input.id)
-      if (form.status !== 'closed') {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Only a closed form can be reopened.',
-        })
-      }
+      if (form.status !== 'closed') throw notReopenable(form.status)
       if (!approvedAsIs(form)) throw changedSinceApproval()
       assertEventAcceptsForms(event)
       assertClosingTimeAhead(form.closesAt, 'reopening it')
@@ -439,12 +542,7 @@ export const orgFormsRouter = createTRPCRouter({
           .where(eq(forms.id, form.id))
           .limit(1)
         if (!current) throw new TRPCError({ code: 'NOT_FOUND' })
-        if (current.status !== 'closed') {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Only a closed form can be reopened.',
-          })
-        }
+        if (current.status !== 'closed') throw notReopenable(current.status)
         throw changedSinceApproval()
       }
 

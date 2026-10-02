@@ -85,6 +85,24 @@ export function FormBuilder({ id }: { id: string }) {
     })
   )
 
+  const withdraw = useMutation(
+    trpc.org.forms.withdraw.mutationOptions({
+      onSuccess: () => {
+        toast.success('Withdrawn from review', {
+          description:
+            'It is a draft again. Submit it when you are ready and it goes back into the queue.',
+        })
+        invalidate()
+      },
+      // The usual cause is an admin deciding first. Reload so the organizer
+      // sees what the form actually is now, next to the message saying so.
+      onError: (err) => {
+        toast.error('Could not withdraw it', { description: err.message })
+        invalidate()
+      },
+    })
+  )
+
   const reopen = useMutation(
     trpc.org.forms.reopen.mutationOptions({
       onSuccess: () => {
@@ -148,10 +166,6 @@ export function FormBuilder({ id }: { id: string }) {
   const { form, event, fields, priceOptions, counts, availability, canReopen } =
     data
   const isLive = form.status === 'published'
-  const canSubmit =
-    form.status === 'draft' ||
-    form.status === 'rejected' ||
-    form.status === 'closed'
   const canDelete = counts.total === 0 && form.claimed === 0
   const submitBlocked = fields.length === 0
 
@@ -232,8 +246,10 @@ export function FormBuilder({ id }: { id: string }) {
         submitBlocked={submitBlocked}
         submitting={submit.isPending}
         reopening={reopen.isPending}
+        withdrawing={withdraw.isPending}
         onSubmit={() => submit.mutate({ id: form.id })}
         onReopen={() => reopen.mutate({ id: form.id })}
+        onWithdraw={() => withdraw.mutate({ id: form.id })}
       />
 
       {isLive ? (

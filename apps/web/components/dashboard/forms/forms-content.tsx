@@ -51,6 +51,7 @@ const TAB_VALUES = [
   'published',
   'rejected',
   'closed',
+  'suspended',
 ] as const
 type TabValue = (typeof TAB_VALUES)[number]
 
@@ -61,6 +62,7 @@ const TABS: { value: TabValue; label: string }[] = [
   { value: 'published', label: 'Live' },
   { value: 'rejected', label: 'Rejected' },
   { value: 'closed', label: 'Closed' },
+  { value: 'suspended', label: 'Taken Down' },
 ]
 
 const SORT_FIELDS = ['name', 'event', 'status', 'applications'] as const
@@ -71,11 +73,14 @@ type SortDir = (typeof DIR_VALUES)[number]
 
 // Ranked so sorting by status walks the lifecycle, not the alphabet.
 const STATUS_ORDER: Record<FormStatus, number> = {
-  rejected: 0,
-  pending_review: 1,
-  draft: 2,
-  published: 3,
-  closed: 4,
+  // A form an admin took down needs the organizer's attention before anything
+  // else does, so it sorts above a rejection.
+  suspended: 0,
+  rejected: 1,
+  pending_review: 2,
+  draft: 3,
+  published: 4,
+  closed: 5,
 }
 
 export function FormsContent() {
@@ -409,7 +414,8 @@ function FormRow({ form }: { form: FormListRow }) {
       <td className="px-5 py-4">
         <div className="flex max-w-[260px] flex-col gap-1">
           <FormStatusBadge status={form.status} className="w-fit" />
-          {form.status === 'rejected' && form.rejectionReason ? (
+          {(form.status === 'rejected' || form.status === 'suspended') &&
+          form.rejectionReason ? (
             <span
               title={form.rejectionReason}
               className="line-clamp-2 text-xs text-rose-600 dark:text-rose-400"

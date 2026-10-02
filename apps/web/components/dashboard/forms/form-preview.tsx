@@ -6,8 +6,10 @@ import { CloudUploadIcon } from '@hugeicons/core-free-icons'
 import { Checkbox } from '@ticketur/ui/components/checkbox'
 import { Input } from '@ticketur/ui/components/input'
 import { Textarea } from '@ticketur/ui/components/textarea'
+import { calculateFeeMinor } from '@ticketur/api/lib/fees'
 import { effectiveRules } from '@ticketur/api/lib/form-fields'
 
+import { formatNaira } from '@/lib/event-display'
 import {
   FIELD_TYPE_LABEL,
   fileTypeLabels,
@@ -23,7 +25,12 @@ import {
 // exactly as they are asked — what the admin sees too. Nothing here is
 // interactive: it is a mirror, not a form.
 export function FormPreview({ data }: { data: FormDetail }) {
-  const { form, fields, priceOptions } = data
+  const { form, fields, priceOptions, serviceFeeBps } = data
+  // A paid option costs the applicant more than the organizer typed: the
+  // platform service fee is added on top, as it is on a ticket. The preview
+  // has to say so, or an organizer sets a ₦5,000 booth fee and finds out from
+  // an applicant that it is really ₦5,250.
+  const anyPriced = priceOptions.some((option) => option.priceMinor > 0)
 
   return (
     <section className="flex shrink-0 flex-col gap-4">
@@ -84,13 +91,18 @@ export function FormPreview({ data }: { data: FormDetail }) {
         )}
 
         {priceOptions.length > 0 ? (
-          <PriceOptionsPreview options={priceOptions} />
+          <PriceOptionsPreview
+            options={priceOptions}
+            serviceFeeBps={serviceFeeBps}
+          />
         ) : null}
 
         <p className="text-muted-foreground border-border/60 border-t pt-4 text-xs">
-          {priceOptions.length > 0
-            ? 'An applicant picks one option and pays for it, when it has a fee, as part of submitting.'
-            : 'This form is free to apply to.'}
+          {priceOptions.length === 0
+            ? 'This form is free to apply to.'
+            : anyPriced
+              ? 'An applicant picks one option and pays for it, when it has a fee, as part of submitting. The total is what they are charged: your price plus the platform service fee, which Ticketeur keeps. You receive your price.'
+              : 'An applicant picks one option as part of submitting. Every option is free, so there is nothing to pay.'}
         </p>
       </div>
     </section>
@@ -290,7 +302,19 @@ function UploadPreview({ field }: { field: FormField }) {
   )
 }
 
-function PriceOptionsPreview({ options }: { options: FormPriceOption[] }) {
+// What the applicant is charged for each option: the organizer's price, the
+// platform service fee on top, and the total — the same three lines, from the
+// same calculateFeeMinor, that the applicant sees on the real form
+// (components/sections/forms/form-apply.tsx). The rate rides in on
+// org.forms.byId, the query the builder already makes, so it is never
+// hardcoded here.
+function PriceOptionsPreview({
+  options,
+  serviceFeeBps,
+}: {
+  options: FormPriceOption[]
+  serviceFeeBps: number
+}) {
   return (
     <QuestionCard heading="Every applicant" typeLabel="Payment">
       <QuestionText
@@ -304,32 +328,54 @@ function PriceOptionsPreview({ options }: { options: FormPriceOption[] }) {
             option.quantityLimit === null
               ? null
               : Math.max(0, option.quantityLimit - option.claimed)
+          const feeMinor = calculateFeeMinor(option.priceMinor, serviceFeeBps)
+          const payableMinor = option.priceMinor + feeMinor
           return (
             <li
               key={option.id}
-              className="border-input flex flex-wrap items-center justify-between gap-2 rounded-[8px] border px-4 py-3 text-sm"
+              className="border-input flex flex-col gap-2 rounded-[8px] border px-4 py-3 text-sm"
             >
-              <span className="flex items-center gap-3">
-                <span
-                  aria-hidden="true"
-                  className="border-input size-4 shrink-0 rounded-full border"
-                />
-                <span className="text-foreground font-medium">
-                  {option.name}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="flex items-center gap-3">
+                  <span
+                    aria-hidden="true"
+                    className="border-input size-4 shrink-0 rounded-full border"
+                  />
+                  <span className="text-foreground font-medium">
+                    {option.name}
+                  </span>
                 </span>
-              </span>
-              <span className="flex items-center gap-3">
-                <span className="text-muted-foreground text-xs">
-                  {left === null
-                    ? 'No limit'
-                    : left === 0
-                      ? 'Full'
-                      : `${left.toLocaleString('en-NG')} left`}
+                <span className="flex items-center gap-3">
+                  <span className="text-muted-foreground text-xs">
+                    {left === null
+                      ? 'No limit'
+                      : left === 0
+                        ? 'Full'
+                        : `${left.toLocaleString('en-NG')} left`}
+                  </span>
+                  <span className="text-foreground font-semibold">
+                    {formatOptionPrice(option.priceMinor)}
+                  </span>
                 </span>
-                <span className="text-foreground font-semibold">
-                  {formatOptionPrice(option.priceMinor)}
-                </span>
-              </span>
+              </div>
+              {feeMinor > 0 ? (
+                <div className="border-border/60 flex flex-col gap-1 border-t pt-2 text-xs">
+                  <div className="flex items-baseline justify-between gap-4">
+                    <span className="text-muted-foreground">Service fee</span>
+                    <span className="text-muted-foreground font-medium">
+                      {formatNaira(feeMinor)}
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-4">
+                    <span className="text-foreground font-semibold">
+                      Applicant pays
+                    </span>
+                    <span className="text-foreground font-semibold">
+                      {formatNaira(payableMinor)}
+                    </span>
+                  </div>
+                </div>
+              ) : null}
             </li>
           )
         })}

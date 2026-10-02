@@ -41,6 +41,7 @@ export const FORM_STATUS_LABEL: Record<FormStatus, string> = {
   published: 'Live',
   rejected: 'Rejected',
   closed: 'Closed',
+  suspended: 'Taken down',
 }
 
 export const FORM_STATUS_TONE: Record<FormStatus, string> = {
@@ -51,6 +52,8 @@ export const FORM_STATUS_TONE: Record<FormStatus, string> = {
     'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400',
   rejected: 'bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-400',
   closed: 'bg-muted text-muted-foreground',
+  suspended:
+    'bg-rose-600 text-white dark:bg-rose-500/80 dark:text-rose-50',
 }
 
 // One line saying what the status means for applicants right now.
@@ -62,6 +65,8 @@ export const FORM_STATUS_MEANING: Record<FormStatus, string> = {
   rejected:
     'Turned down by an admin. Fix what they asked for and submit it again.',
   closed: 'Not taking applications. Every submission is kept.',
+  suspended:
+    'An admin took this form off the platform. Its page is not public and it takes no applications.',
 }
 
 export const FORM_TYPE_LABEL: Record<FormType, string> = {

@@ -8,15 +8,21 @@ import { cn } from '@ticketur/ui/lib/utils'
 import { WebVitals } from '@ticketur/observability/client'
 import { env } from '@ticketur/env/client'
 
+// 56 characters: long enough to use the SERP line, short enough not to be
+// truncated. Keywords lead, brand closes — matching the `%s | Ticketeur`
+// template the rest of the pages render through.
+const TITLE = 'Discover Events, Book Tickets & Find Vendors | Ticketeur'
+
+// 157 characters — fills the SERP snippet without being truncated at ~160.
 const DESCRIPTION =
-  'Discover events, book tickets, and find vendors to work with — all in one place.'
+  'Discover events near you, book tickets in minutes, and find trusted vendors for your next event. Ticketeur brings organizers, attendees and vendors together.'
 
 export const metadata: Metadata = {
   // Resolves relative URLs in Open Graph/Twitter metadata, and silences the
   // build warning Next emits when it has no origin to resolve them against.
   metadataBase: new URL(env.NEXT_PUBLIC_APP_URL),
   title: {
-    default: 'Ticketeur',
+    default: TITLE,
     template: '%s | Ticketeur',
   },
   description: DESCRIPTION,
@@ -30,12 +36,12 @@ export const metadata: Metadata = {
     type: 'website',
     siteName: 'Ticketeur',
     url: '/',
-    title: 'Ticketeur',
+    title: TITLE,
     description: DESCRIPTION,
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Ticketeur',
+    title: TITLE,
     description: DESCRIPTION,
   },
 }

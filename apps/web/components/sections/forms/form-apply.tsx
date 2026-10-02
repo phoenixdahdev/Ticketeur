@@ -284,16 +284,17 @@ export function FormApply({
 
   function send() {
     setFormError(null)
-    const validated = check()
-    if (!validated) {
-      setWaitingForUploads(false)
-      return
-    }
 
+    // Before validating, not after: a photo that is still at 90% has no URL
+    // yet, so validating first would tell them their required photo is
+    // missing when it is in fact on its way.
     if (uploading) {
       setWaitingForUploads(true)
       return
     }
+
+    const validated = check()
+    if (!validated) return
 
     if (!signedInRef.current) {
       // Saved before the dialog opens, so even the paths that do navigate

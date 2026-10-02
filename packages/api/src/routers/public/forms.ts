@@ -39,6 +39,7 @@ import {
   type FormUnavailableReason,
 } from '../../lib/forms'
 import { PAYMENT_CURRENCY, toFlutterwaveAmount } from '../../lib/payment-amount'
+import { getFeeRates } from '../../lib/platform-settings'
 
 // A form holds at most 100 fields; this only turns away an oversized payload
 // before any work is done.
@@ -181,9 +182,20 @@ export const publicFormsRouter = createTRPCRouter({
         .where(eq(formFields.formId, form.id))
         .orderBy(asc(formFields.position), asc(formFields.id))
 
+      // The registration service-fee rate travels with the prices it applies
+      // to. The applicant's page already makes this query — it cannot render
+      // without it — so the rate is there on the first paint, with no second
+      // round trip and no window in which a price is on screen without the fee
+      // that goes with it. It is for DISPLAY only: submit re-reads the rate
+      // and that figure is what gets charged.
+      const feeRates = await getFeeRates(ctx.db)
+
       return {
         state: 'open' as const,
         ...summary,
+        // Basis points (500 = 5%). Apply it with calculateFeeMinor from
+        // @ticketur/api/lib/fees, the same function the server charges with.
+        serviceFeeBps: feeRates.registration,
         // 'auto' lets the page promise an instant confirmation; 'manual'
         // means the applicant waits for the organizer's review.
         reviewMode: form.reviewMode,
@@ -282,12 +294,18 @@ export const publicFormsRouter = createTRPCRouter({
         })
       }
 
-      // What the applicant is charged, in minor units: the chosen option's
-      // price exactly, with no service fee (see createRegistrationOrder). 0 on
-      // a free form or a free option.
+      // The chosen option's price in minor units, before the platform's
+      // registration service fee. 0 on a free form or a free option.
       const priceMinor = option?.priceMinor ?? 0
       const status: Exclude<SubmissionStatus, 'rejected'> =
         priceMinor > 0 ? 'pending_payment' : completedStatus(form.reviewMode)
+
+      // Read once, here, outside the transaction, and used for both the order
+      // row and the Flutterwave request, so the two cannot be computed from
+      // different rates. Whatever rate the applicant's page was showing is
+      // irrelevant: submitInput carries no money, so a stale rate in an open
+      // tab can make the preview wrong but never the charge.
+      const feeBps = (await getFeeRates(ctx.db)).registration
 
       const created = await ctx.db.transaction(async (tx) => {
         // Before the spot claim, which locks the form row: this locks the
@@ -363,6 +381,7 @@ export const publicFormsRouter = createTRPCRouter({
                 submissionId: inserted.id,
                 eventId: event.id,
                 amountMinor: priceMinor,
+                feeBps,
                 applicant,
               })
             : null
@@ -378,9 +397,13 @@ export const publicFormsRouter = createTRPCRouter({
         try {
           const { link } = await createPayment({
             txRef: payment.txRef,
-            // Whole naira, through the helper fulfilment verifies the charge
-            // against, so what we ask for and what we accept can't drift.
-            amount: toFlutterwaveAmount(priceMinor),
+            // The ORDER's total — the option's price plus the service fee —
+            // not the bare price. Whole naira, through the helper fulfilment
+            // verifies the charge against, so what we ask for and what we
+            // accept can't drift. fulfilOrder checks a charge against
+            // orders.totalMinor, so asking for anything less here would make
+            // every paid registration land as underpaid.
+            amount: toFlutterwaveAmount(payment.totalMinor),
             currency: PAYMENT_CURRENCY,
             redirectUrl: `${baseUrl}/checkout/return`,
             customer: { email: applicant.email, name: applicant.name },
@@ -439,8 +462,13 @@ export const publicFormsRouter = createTRPCRouter({
         status,
         // True while the chosen option's fee is unpaid.
         requiresPayment: status === 'pending_payment',
-        // What the applicant is charged, in minor units; 0 when free.
+        // The option's price, in minor units; 0 when free.
         amountMinor: priceMinor,
+        // The platform service fee charged on it, and the total the applicant
+        // pays. Both 0 on a free application. These come from the order row,
+        // so they are the amounts actually charged, not a second calculation.
+        feeMinor: payment?.feeMinor ?? 0,
+        totalMinor: payment?.totalMinor ?? priceMinor,
         // The Flutterwave checkout link when there is a fee; null otherwise.
         paymentUrl,
       }

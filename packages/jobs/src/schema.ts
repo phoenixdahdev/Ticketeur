@@ -272,3 +272,20 @@ export const votePurchaseSchema = z.object({
   unusable: z.boolean().default(false),
 })
 export type VotePurchasePayload = z.infer<typeof votePurchaseSchema>
+
+// The one-time code that proves the email behind a FREE vote
+// (packages/api/src/lib/vote-otp.ts). The plaintext code travels in this
+// payload because the database holds only a scrypt digest of it — there is
+// nowhere for the task to load it back from.
+export const voteCodeSchema = z.object({
+  email: z.email(),
+  // Six digits as a string, so a leading zero survives the round trip.
+  code: z.string().regex(/^\d{4,8}$/),
+  contestTitle: z.string(),
+  eventTitle: z.string(),
+  contestUrl: z.string(),
+  // Minutes the code is good for, from VOTE_CODE_TTL_MINUTES, so the email
+  // and the verifier cannot disagree about how long the voter has.
+  expiresInMinutes: z.number().int().min(1).default(10),
+})
+export type VoteCodePayload = z.infer<typeof voteCodeSchema>

@@ -7,6 +7,7 @@ import { vendorsRouter } from './vendors'
 import { orgProfileRouter } from './org/profile'
 import { orgVouchersRouter } from './org/vouchers'
 import { orgFormsRouter } from './org/forms'
+import { orgContestsRouter } from './org/contests'
 import { vendorRouter } from './vendor/_index'
 import { publicRouter } from './public/_index'
 import { accountRouter } from './account/_index'
@@ -20,6 +21,7 @@ export const appRouter = createTRPCRouter({
     profile: orgProfileRouter,
     vouchers: orgVouchersRouter,
     forms: orgFormsRouter,
+    contests: orgContestsRouter,
   }),
   vendor: vendorRouter,
   public: publicRouter,

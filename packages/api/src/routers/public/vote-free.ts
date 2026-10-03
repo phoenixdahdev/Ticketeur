@@ -8,7 +8,6 @@ import { createTRPCRouter, publicProcedure } from '../../trpc'
 import { getBaseUrl } from '../../lib/base-url'
 import { sendVoteCode } from '../../lib/vote-emails'
 import {
-  consumeVoteCode,
   issueVoteCode,
   verifyVoteCode,
   VOTE_CODE_TTL_MINUTES,
@@ -349,18 +348,25 @@ export const publicVoteFreeRouter = createTRPCRouter({
 
       try {
         return await ctx.db.transaction(async (tx) => {
-          // vote_otps first, then entries, then votes — the lock order the
-          // paid path follows too.
-          const spent = await consumeVoteCode(tx, { otpId: verified.otpId })
-          if (!spent) {
-            // Another request holding the same code got there first, or it
-            // expired in the moments since it verified.
-            throw new TRPCError({
-              code: 'UNAUTHORIZED',
-              message: CODE_FAILURE_MESSAGES.consumed,
-            })
-          }
-
+          // The code is NOT consumed here, matching castPaid.
+          //
+          // It used to be, and that made a multi-category contest unusable:
+          // every category needed its own code, and issueVoteCode allows six
+          // an hour with a minute between them. A contest with more than six
+          // categories could not be voted in at all within an hour, and even
+          // six meant six inbox round trips. Most people would vote once and
+          // leave.
+          //
+          // Not consuming does not widen what a code authorises, because the
+          // thing that stops a second free vote is not the code — it is the
+          // partial unique index `votes_free_daily_unique`, one row per
+          // (category, email, day), which castVotes runs into regardless. So
+          // one code now covers one vote in each of several categories, and
+          // still cannot buy a second vote in any of them.
+          //
+          // Its life is bounded exactly as the paid path's is: ten minutes
+          // from issue, and at most MAX_VERIFY_ATTEMPTS presentations, since
+          // verifyVoteCode charges an attempt for a correct guess too.
           const cast = await castVotes(tx, {
             contestId: contest.id,
             categoryId: entry.categoryId,

@@ -51,7 +51,7 @@ export default function VoteCodeEmail({
             <strong>
               {expiresInMinutes} {expiresInMinutes === 1 ? 'minute' : 'minutes'}
             </strong>
-            {paid ? '.' : ', and works once.'}
+            .
           </Text>
         </Section>
 
@@ -66,8 +66,10 @@ export default function VoteCodeEmail({
           ) : (
             <Text className="m-0 text-sm leading-5 text-gray-700">
               Free voting is <strong>one vote per category, per day</strong>.
-              Come back tomorrow to vote again — or buy votes on the contest
-              page if you would rather not wait.
+              This one code covers every category you want to vote in today —
+              you do not need a new one for each. Come back tomorrow to vote
+              again, or buy votes on the contest page if you would rather not
+              wait.
             </Text>
           )}
         </Section>

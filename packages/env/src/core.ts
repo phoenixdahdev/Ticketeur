@@ -44,6 +44,37 @@ export const env = createEnv({
     // rather than this schema, so a malformed value fails that one route
     // closed instead of every consumer of this module on import.
     CRON_SECRET: z.string().optional(),
+    // ─── Rate limiting (packages/api/src/lib/rate-limit.ts) ───────────────
+    // The volume brake in front of the public tRPC procedures. Parsed here,
+    // once, at boot: a typo in a production value should fail the deploy
+    // rather than silently resolve to NaN on the request path.
+    //
+    // The kill switch. Set to "false" (or "0"/"off") and redeploy to turn the
+    // brake off wholesale; the middleware then admits every call.
+    RATE_LIMIT_ENABLED: z
+      .enum(['true', 'false', '1', '0', 'on', 'off'])
+      .default('true')
+      .transform(
+        (value) => value === 'true' || value === '1' || value === 'on'
+      ),
+    // Calls one caller may make per minute. Reads and writes are separate
+    // budgets because the risks are not comparable: a leaderboard read is a
+    // SELECT, a vote cast is a transaction that may also send an email or
+    // open a Flutterwave session. See rate-limit.ts for how the numbers were
+    // chosen. The ceilings keep a fat-fingered value from making the brake
+    // either useless or a self-inflicted outage.
+    RATE_LIMIT_READS_PER_MINUTE: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(100_000)
+      .default(300),
+    RATE_LIMIT_WRITES_PER_MINUTE: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(100_000)
+      .default(30),
     // Axiom observability (OpenTelemetry traces + structured logs). Optional
     // so local dev and CI builds without Axiom configured are a graceful no-op.
     AXIOM_TOKEN: z.string().optional(),

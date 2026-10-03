@@ -20,6 +20,7 @@ import { formatNaira, formatEventDate } from '@/lib/event-display'
 
 import { EventHero } from '@/components/sections/event-detail/event-hero'
 import { EventTabs } from '@/components/sections/event-detail/event-tabs'
+import { EventContests } from '@/components/sections/event-detail/event-contests'
 import { SimilarEvents } from '@/components/sections/event-detail/similar-events'
 import { EventDetailSkeleton } from '@/components/sections/event-detail/event-detail-skeleton'
 import type { EventVendor } from '@/components/sections/event-detail/vendors-tab'
@@ -91,6 +92,10 @@ export function EventDetailContent({ slug }: { slug: string }) {
   return (
     <>
       <EventHero event={detail} />
+      {/* Renders nothing unless this event has a contest the public may see.
+          Its own query, not a field on bySlug: the event read is the hottest
+          on the platform and most events have no contest at all. */}
+      <EventContests slug={slug} />
       <EventTabs event={detail} vendors={vendors} />
       <SimilarEvents eventId={event.id} />
     </>

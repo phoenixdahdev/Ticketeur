@@ -116,9 +116,14 @@ export default async function EventDetailPage({
   // Prefetch the event so the detail view (and the tickets tab, which shares
   // this query key) hydrate instead of fetching client-side.
   const { trpc, queryClient } = await getServerTRPC()
-  await queryClient.prefetchQuery(
-    trpc.public.events.bySlug.queryOptions({ slug })
-  )
+  await Promise.all([
+    queryClient.prefetchQuery(trpc.public.events.bySlug.queryOptions({ slug })),
+    // The contests on this event, so the link to one is on the page the
+    // moment it paints rather than after the client has fetched.
+    queryClient.prefetchQuery(
+      trpc.public.contestDiscovery.forEvent.queryOptions({ eventSlug: slug })
+    ),
+  ])
   return (
     <HydrateClient>
       <EventDetailContent slug={slug} />

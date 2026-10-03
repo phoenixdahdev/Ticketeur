@@ -1,6 +1,7 @@
 import { and, eq, inArray, ne, sql } from 'drizzle-orm'
 
 import {
+  contests,
   events,
   forms,
   orderItems,
@@ -68,6 +69,14 @@ export const FORM_PENDING = eq(forms.status, 'pending_review')
 // can act on. 'suspended' is deliberately absent — that IS the taken-down
 // state.
 export const FORM_PUBLIC = inArray(forms.status, ['published', 'closed'])
+// A contest waiting for an admin to approve its ballot and its prices. The
+// same word, the same meaning, as FORM_PENDING — see lib/contest-review.ts.
+export const CONTEST_PENDING = eq(contests.status, 'pending_review')
+// A contest the public can reach: taking votes, or closed with its results
+// page still up. Deliberately the SAME allow-list `loadPublicContest` uses
+// (routers/public/contests.ts), and what admin.moderation.takeDownContest can
+// act on. 'suspended' is absent because that IS the taken-down state.
+export const CONTEST_PUBLIC = inArray(contests.status, ['published', 'closed'])
 export const PAID = eq(orders.status, 'paid')
 // A payment discrepancy nobody has recorded a refund for yet.
 export const DISCREPANCY_OPEN = eq(paymentDiscrepancies.status, 'open')

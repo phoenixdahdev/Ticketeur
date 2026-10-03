@@ -1,6 +1,7 @@
 import { count, desc, eq, sql } from 'drizzle-orm'
 
 import {
+  contests,
   events,
   forms,
   orders,
@@ -16,10 +17,10 @@ import {
   VENDOR_PENDING,
   EVENT_PENDING,
   FORM_PENDING,
+  CONTEST_PENDING,
   REPORT_OPEN,
   DISCREPANCY_OPEN,
 } from '../../lib/predicates'
-
 
 export const adminOverviewRouter = createTRPCRouter({
   // One round-trip for the four cards on the overview page.
@@ -57,6 +58,13 @@ export const adminOverviewRouter = createTRPCRouter({
       .select({ value: count(forms.id) })
       .from(forms)
       .where(FORM_PENDING)
+    // A contest waiting for review is an approval like any other, so it is
+    // part of this figure: the "Pending Approvals" card on the overview is
+    // how an admin on any page learns there is something to decide.
+    const [pendingContestRow] = await ctx.db
+      .select({ value: count(contests.id) })
+      .from(contests)
+      .where(CONTEST_PENDING)
 
     // Money the platform is holding that it may owe back. Deliberately NOT
     // folded into `pendingApprovals`: an approval is a judgement call, this is
@@ -74,7 +82,8 @@ export const adminOverviewRouter = createTRPCRouter({
       Number(pendingVendorRow?.value ?? 0) +
       Number(pendingEventRow?.value ?? 0) +
       Number(reportRow?.value ?? 0) +
-      Number(pendingFormRow?.value ?? 0)
+      Number(pendingFormRow?.value ?? 0) +
+      Number(pendingContestRow?.value ?? 0)
 
     return {
       totalUsers: Number(userRow?.value ?? 0),

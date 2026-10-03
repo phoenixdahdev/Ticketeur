@@ -58,3 +58,13 @@ export type {
   SubmissionApprovedPayload,
   SubmissionRejectedPayload,
 } from './schema'
+export {
+  contestApprovedSchema,
+  contestRejectedSchema,
+  contestTakenDownSchema,
+} from './schema'
+export type {
+  ContestApprovedPayload,
+  ContestRejectedPayload,
+  ContestTakenDownPayload,
+} from './schema'

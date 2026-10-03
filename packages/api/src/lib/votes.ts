@@ -1,14 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm'
 
 import type { ContestStatus, Database, VoteKind } from '@ticketur/db'
-import {
-  contests,
-  db,
-  entries,
-  orders,
-  voteCredits,
-  votes,
-} from '@ticketur/db'
+import { contests, db, entries, orders, voteCredits, votes } from '@ticketur/db'
 
 import { newId } from './ids'
 
@@ -106,13 +99,26 @@ export function voteDay(
   timeZone: string = DEFAULT_VOTE_TIME_ZONE,
   now: Date = new Date()
 ): string {
-  const zone = isValidTimeZone(timeZone) ? timeZone : DEFAULT_VOTE_TIME_ZONE
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: zone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(now)
+  // Tried in order, because the fallback can fail too: a runtime built with
+  // small-icu resolves no named zone at all, so formatting with the default
+  // after rejecting the argument would throw just the same. UTC is the last
+  // resort — it is the one zone every build can resolve. A vote must never
+  // fail because of how the runtime was compiled.
+  for (const zone of [timeZone, DEFAULT_VOTE_TIME_ZONE, 'UTC']) {
+    if (!isValidTimeZone(zone)) continue
+    try {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: zone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(now)
+    } catch {
+      // Resolvable but unformattable: try the next one.
+    }
+  }
+  // Nothing resolved. toISOString is UTC and always works.
+  return now.toISOString().slice(0, 10)
 }
 
 // ─── The voting window ──────────────────────────────────────────────────────

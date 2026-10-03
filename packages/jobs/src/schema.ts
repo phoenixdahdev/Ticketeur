@@ -289,3 +289,45 @@ export const voteCodeSchema = z.object({
   expiresInMinutes: z.number().int().min(1).default(10),
 })
 export type VoteCodePayload = z.infer<typeof voteCodeSchema>
+
+// ─── Contest review ────────────────────────────────────────────────────────
+// Sent to the organizer when an admin decides a contest
+// (packages/api/src/lib/contest-emails.ts). The same three shapes as the form
+// review emails above, for the same three decisions, because a contest is
+// moderated by the same machinery (packages/api/src/lib/contest-review.ts).
+
+export const contestApprovedSchema = z.object({
+  email: z.email(),
+  organizerName: z.string(),
+  contestTitle: z.string(),
+  eventTitle: z.string(),
+  publicUrl: z.url(),
+  manageUrl: z.url(),
+})
+export type ContestApprovedPayload = z.infer<typeof contestApprovedSchema>
+
+export const contestRejectedSchema = z.object({
+  email: z.email(),
+  organizerName: z.string(),
+  contestTitle: z.string(),
+  eventTitle: z.string(),
+  // Required: an admin can't reject a contest without saying why.
+  reason: z.string().min(1),
+  manageUrl: z.url(),
+})
+export type ContestRejectedPayload = z.infer<typeof contestRejectedSchema>
+
+// An admin took a contest that was already public off the platform. Same
+// shape as a rejection, different message: this contest was live and taking
+// money, so the organizer is told it has been pulled down rather than that it
+// wasn't approved.
+export const contestTakenDownSchema = z.object({
+  email: z.email(),
+  organizerName: z.string(),
+  contestTitle: z.string(),
+  eventTitle: z.string(),
+  // Required: an admin can't take a contest down without saying why.
+  reason: z.string().min(1),
+  manageUrl: z.url(),
+})
+export type ContestTakenDownPayload = z.infer<typeof contestTakenDownSchema>

@@ -9,6 +9,7 @@ export const DISCREPANCY_KINDS = [
   'duplicate_charge',
   'undelivered',
   'registration_rejected',
+  'votes_unusable',
 ] as const satisfies readonly DiscrepancyKind[]
 
 export const KIND_LABEL: Record<DiscrepancyKind, string> = {
@@ -17,6 +18,7 @@ export const KIND_LABEL: Record<DiscrepancyKind, string> = {
   duplicate_charge: 'Paid twice',
   undelivered: 'Paid, not delivered',
   registration_rejected: 'Application rejected',
+  votes_unusable: 'Votes cannot be used',
 }
 
 // One line stating what the customer is holding right now. An admin reading
@@ -32,6 +34,8 @@ export const KIND_SUMMARY: Record<DiscrepancyKind, string> = {
     'The charge paid for this order, but it could not be delivered and the fulfilment was rolled back. The customer holds nothing, so the whole charge is owed back — unless the order is delivered by hand instead.',
   registration_rejected:
     'The applicant paid this registration fee in full, and the organizer then rejected their application and released the spot. They paid to take part and are not taking part, so the whole fee is owed back. Refund it in Flutterwave and record it here.',
+  votes_unusable:
+    'The charge bought votes for a contest that had already stopped accepting them when it cleared. The credits are on their account but can never be spent, so the whole charge is owed back. Refund it in Flutterwave and record it here.',
 }
 
 // Whether the customer received what they paid for. Drives the red/amber
@@ -43,6 +47,7 @@ export const KIND_SEVERITY: Record<DiscrepancyKind, 'warning' | 'danger'> = {
   duplicate_charge: 'danger',
   undelivered: 'danger',
   registration_rejected: 'danger',
+  votes_unusable: 'danger',
 }
 
 // Why the charge was recorded, as stored in `reason`.
@@ -57,6 +62,7 @@ export const REASON_LABEL: Record<string, string> = {
   fulfilment_failed: 'Fulfilment failed after the payment was accepted',
   application_rejected:
     'The organizer rejected the application this fee paid for',
+  voting_closed: 'Voting had closed by the time the payment cleared',
 }
 
 export function reasonLabel(reason: string): string {

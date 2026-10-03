@@ -26,6 +26,7 @@ import {
   type OrderItemRow,
   type OrderWithDetails,
 } from '@ticketur/api/lib/orders'
+import { loadVotesForOrder, type VotesForOrder } from '@ticketur/api/lib/votes'
 
 import { formatEventDate, formatNaira } from '@/lib/event-display'
 
@@ -146,9 +147,29 @@ export default async function CheckoutReturnPage({
       />
     )
   }
+  if (head.order.type === 'vote_purchase') {
+    const bought = await loadVotesForOrder(head.order)
+    // No contest behind the order is a broken row, not a state worth
+    // explaining: fall back rather than render half a screen.
+    if (bought) {
+      return (
+        <VotesScreen
+          state={
+            head.order.status === 'paid'
+              ? 'paid'
+              : head.order.status === 'failed'
+                ? 'unconfirmed'
+                : 'processing'
+          }
+          reference={orderRef(order.id)}
+          votes={bought}
+        />
+      )
+    }
+  }
   if (head.order.type !== 'ticket') {
-    // A type with no fulfilment yet (vendor_fee, vote_purchase): fulfillOrder
-    // refused it and left it for a person, so there is nothing to show yet.
+    // A type with no fulfilment yet (vendor_fee): fulfillOrder refused it and
+    // left it for a person, so there is nothing to show yet.
     return <OtherPaymentScreen reference={orderRef(order.id)} />
   }
 
@@ -157,7 +178,8 @@ export default async function CheckoutReturnPage({
   if (head.order.status === 'failed') {
     return <FailedScreen reason="unconfirmed" reference={orderRef(order.id)} />
   }
-  if (head.order.status !== 'paid') return <ProcessingScreen orderId={order.id} />
+  if (head.order.status !== 'paid')
+    return <ProcessingScreen orderId={order.id} />
 
   const items = await loadOrderItems(order.id)
   return <SuccessScreen head={head} items={items} />
@@ -362,11 +384,7 @@ function FailedScreen({
 }
 
 type RegistrationState =
-  | 'paid'
-  | 'processing'
-  | 'unconfirmed'
-  | 'cancelled'
-  | 'failed'
+  'paid' | 'processing' | 'unconfirmed' | 'cancelled' | 'failed'
 
 // A registration-fee payer's view: where their application stands and the
 // reference to quote. Never tickets: a registration fee doesn't buy any.
@@ -507,6 +525,95 @@ function RegistrationScreen({
 
 // An order type with no fulfilment yet. Nothing was delivered, and nothing
 // here suggests tickets.
+function VotesScreen({
+  state,
+  reference,
+  votes,
+}: {
+  state: 'paid' | 'processing' | 'unconfirmed'
+  reference: string
+  votes: VotesForOrder
+}) {
+  if (state !== 'paid') {
+    return (
+      <section className="mx-auto flex w-full max-w-180 flex-col items-center gap-6 px-6 py-20 text-center md:py-28">
+        <p className="text-primary text-xs font-bold tracking-[0.2em] uppercase">
+          {state === 'unconfirmed' ? 'Not confirmed' : 'Processing'}
+        </p>
+        <h1 className="font-heading text-foreground text-3xl font-bold tracking-tight md:text-4xl">
+          {state === 'unconfirmed'
+            ? "We couldn't confirm this payment"
+            : "We're confirming your payment"}
+        </h1>
+        <p className="text-muted-foreground text-sm leading-7">
+          {state === 'unconfirmed'
+            ? 'No votes have been added, and if you were charged it will be returned. Contact support and quote order '
+            : "Your votes appear as soon as it clears, and we'll email you. Quote order "}
+          {reference}.
+        </p>
+        <Button asChild size="xl">
+          <Link href={`/contests/${votes.contestSlug}`}>
+            Back to the contest
+          </Link>
+        </Button>
+      </section>
+    )
+  }
+
+  // Paid, but the contest stopped taking votes before the charge cleared. The
+  // credits are real and unspendable; deliverOrder has already recorded the
+  // refund owed, so this says so plainly instead of inviting them to vote.
+  if (votes.unusable) {
+    return (
+      <section className="mx-auto flex w-full max-w-180 flex-col items-center gap-6 px-6 py-20 text-center md:py-28">
+        <p className="text-primary text-xs font-bold tracking-[0.2em] uppercase">
+          Payment received
+        </p>
+        <h1 className="font-heading text-foreground text-3xl font-bold tracking-tight md:text-4xl">
+          Voting closed before your payment reached us
+        </h1>
+        <p className="text-muted-foreground text-sm leading-7">
+          Your {votes.votesBought} {votes.votesBought === 1 ? 'vote' : 'votes'}{' '}
+          for <strong className="text-foreground">{votes.contestTitle}</strong>{' '}
+          can&apos;t be used, so you&apos;re owed your money back. Refunds are
+          made by hand, so please allow a few working days — you don&apos;t need
+          to do anything. Quote order {reference} if you need to ask.
+        </p>
+        <Button asChild size="xl" variant="outline">
+          <Link href="/events">Browse events</Link>
+        </Button>
+      </section>
+    )
+  }
+
+  return (
+    <section className="mx-auto flex w-full max-w-180 flex-col items-center gap-6 px-6 py-20 text-center md:py-28">
+      <HugeiconsIcon
+        icon={CheckmarkCircle02Icon}
+        className="text-primary size-14"
+        strokeWidth={1.8}
+      />
+      <p className="text-primary text-xs font-bold tracking-[0.2em] uppercase">
+        Votes added
+      </p>
+      <h1 className="font-heading text-foreground text-3xl font-bold tracking-tight md:text-4xl">
+        You have {votes.votesRemaining}{' '}
+        {votes.votesRemaining === 1 ? 'vote' : 'votes'} to cast
+      </h1>
+      <p className="text-muted-foreground text-sm leading-7">
+        {votes.votesBought} {votes.votesBought === 1 ? 'vote' : 'votes'} added
+        to your balance for{' '}
+        <strong className="text-foreground">{votes.contestTitle}</strong>. Spend
+        them on one entry or split them across several — it&apos;s up to you.
+      </p>
+      <Button asChild size="xl">
+        <Link href={`/contests/${votes.contestSlug}`}>Cast your votes</Link>
+      </Button>
+      <p className="text-muted-foreground text-xs">Order {reference}</p>
+    </section>
+  )
+}
+
 function OtherPaymentScreen({ reference }: { reference: string }) {
   return (
     <section className="mx-auto flex w-full max-w-180 flex-col items-center gap-6 px-6 py-20 text-center md:py-28">

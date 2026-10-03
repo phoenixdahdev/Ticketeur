@@ -62,6 +62,15 @@ export const contests = pgTable(
     nominationsOpenAt: timestamp('nominations_open_at'),
     nominationsCloseAt: timestamp('nominations_close_at'),
 
+    // The IANA zone the contest is run in, captured from the organizer's
+    // browser when they create it. This is what decides when "today" rolls
+    // over for the daily free vote: a Nigerian contest resets at local
+    // midnight, not at 01:00 because the server thinks in UTC. Stored per
+    // contest rather than read from the organizer's profile, because the
+    // answer must not change for votes already cast if they later travel.
+    // Africa/Lagos is the default: it is where this platform operates.
+    timeZone: text('time_zone').notNull().default('Africa/Lagos'),
+
     // ── How voting is paid for ──
     // Both may run at once: a verified email gets one free vote per category
     // per day, and anyone can buy more on top.

@@ -34,6 +34,7 @@ import {
   type DiscrepancyInput,
 } from './payment-discrepancies'
 import { generateAndStoreTicketsPdf, ticketUrl } from './tickets-pdf'
+import { sendVotePurchaseReceipt } from './vote-emails'
 import {
   creditVotePurchase,
   type VoteCreditFailure,
@@ -311,9 +312,7 @@ function discrepancyFacts(
     expectedMinor: toFlutterwaveAmount(order.totalMinor) * 100,
     paidMinor: chargeAmountMinor(charge.amount),
     paidCurrency:
-      typeof charge.currency === 'string'
-        ? charge.currency.toUpperCase()
-        : '',
+      typeof charge.currency === 'string' ? charge.currency.toUpperCase() : '',
   }
 }
 
@@ -645,6 +644,35 @@ async function deliverOrder(
       // re-checks it under the same row lock (see lib/votes.ts).
       const result = await creditVotePurchase(tx, order)
       if (!result.ok) throw refuse(result.reason)
+
+      if (result.credit.unusable) {
+        // The contest stopped accepting votes between the payment link and
+        // this charge clearing. The credits are real and can never be spent,
+        // so the whole charge is owed back. Recorded here, inside the same
+        // transaction as the credit, through recordDiscrepancy's SAVEPOINT —
+        // which never throws, so a failure to book the obligation can never
+        // roll back a payment we have already accepted.
+        await recordDiscrepancy(tx, {
+          kind: 'votes_unusable',
+          orderId: order.id,
+          orderType: 'vote_purchase',
+          eventId: order.eventId,
+          buyerEmail: order.buyerEmail,
+          buyerName: order.buyerName,
+          flwTxRef: order.flwTxRef,
+          flwTransactionId,
+          expectedMinor: order.totalMinor,
+          // The charge cleared its amount check, so it paid at least this.
+          // Any excess above it already has its own 'overpayment' row and is
+          // not owed twice.
+          paidMinor: order.totalMinor,
+          paidCurrency: PAYMENT_CURRENCY,
+          owedMinor: order.totalMinor,
+          reason: 'voting_closed',
+          detail: `${result.credit.votesGranted} vote${result.credit.votesGranted === 1 ? '' : 's'} bought for “${result.credit.contestTitle}”, which had stopped accepting votes by the time the payment cleared. The credits cannot be spent, so the whole charge is owed back.`,
+        })
+      }
+
       return { kind: 'votes', ...result.credit }
     }
 
@@ -758,10 +786,16 @@ export async function notifyFulfilment(
       }
       return
     case 'votes':
-      // Nothing to send yet. The credits are spendable the moment this
-      // commits and the voter is on the /checkout/return page; the receipt
-      // email belongs with the rest of the voting emails, which this change
-      // deliberately does not touch.
+      // The receipt. It also carries the bad news when the contest stopped
+      // accepting votes before the charge cleared: the credits exist, cannot
+      // be spent, and the money is owed back (deliverOrder has already put
+      // that on the Refunds Owed screen).
+      await sendVotePurchaseReceipt(result.order.id, {
+        baseUrl,
+        votesGranted: credit.votesGranted,
+        votesRemaining: credit.purchased - credit.spent,
+        unusable: credit.unusable,
+      })
       return
   }
 }
@@ -829,15 +863,20 @@ export async function notifyOrderFulfilled({
     const name = t.recipientName || head.order.buyerName || 'there'
     const r =
       recipients.get(email) ??
-      ({ name, email, firstCode: t.code, tiers: new Map(), count: 0 } as Recipient)
+      ({
+        name,
+        email,
+        firstCode: t.code,
+        tiers: new Map(),
+        count: 0,
+      } as Recipient)
     const tierName = t.tierName ?? 'General'
     r.tiers.set(tierName, (r.tiers.get(tierName) ?? 0) + 1)
     r.count += 1
     recipients.set(email, r)
   }
 
-  const isGroup =
-    recipients.size > 1 || (head.order.attendees?.length ?? 0) > 0
+  const isGroup = recipients.size > 1 || (head.order.attendees?.length ?? 0) > 0
   const eventDate = formatEventDateRange(
     head.event.eventDate,
     head.event.endDate

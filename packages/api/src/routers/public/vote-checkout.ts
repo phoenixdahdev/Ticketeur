@@ -377,7 +377,9 @@ export const publicVoteCheckoutRouter = createTRPCRouter({
         normalizeVoterEmail(ctx.session.user.email) === voterEmail
           ? ctx.session.user.id
           : null
-      const votedOn = voteDay()
+      // The contest's own zone, not the server's: a Nigerian contest's free
+      // vote resets at local midnight (see voteDay in lib/votes.ts).
+      const votedOn = voteDay(contest.timeZone)
 
       return ctx.db.transaction(async (tx) => {
         const spend = await spendVoteCredits(tx, {

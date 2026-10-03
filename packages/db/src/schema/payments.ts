@@ -56,6 +56,14 @@ export type PaymentDiscrepancyKind =
   // on 'undelivered' advice ("unless the order is delivered by hand instead")
   // would be re-approving an application the organizer turned down.
   | 'registration_rejected'
+  // The charge bought votes for a contest that had stopped accepting them by
+  // the time it cleared — closed or suspended between the payment link and
+  // the webhook. The credits exist but can never be spent, so the whole
+  // charge is owed back. Deliberately not 'undelivered': fulfilment did not
+  // fail and nothing rolled back, and an admin following that row's advice
+  // ("unless the order is delivered by hand instead") would be looking for a
+  // delivery that cannot happen.
+  | 'votes_unusable'
 
 // Resolution is an explicit human action. Nothing in this codebase moves a row
 // to 'resolved' on its own — refunds happen by hand in Flutterwave and an

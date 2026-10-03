@@ -1,5 +1,5 @@
 {
-  "id": "734cb704-a007-4f55-8157-078539ab9b0e",
+  "id": "54df6119-534e-439d-aaa0-5ad4dbd80d57",
   "prevId": "bfee126d-09d7-47e7-90fb-a3f5392c5c5d",
   "version": "7",
   "dialect": "postgresql",
@@ -824,6 +824,13 @@
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
+        },
+        "time_zone": {
+          "name": "time_zone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'Africa/Lagos'"
         },
         "free_voting_enabled": {
           "name": "free_voting_enabled",

@@ -1,7 +1,14 @@
 import { and, eq, sql } from 'drizzle-orm'
 
 import type { ContestStatus, Database, VoteKind } from '@ticketur/db'
-import { contests, entries, orders, voteCredits, votes } from '@ticketur/db'
+import {
+  contests,
+  db,
+  entries,
+  orders,
+  voteCredits,
+  votes,
+} from '@ticketur/db'
 
 import { newId } from './ids'
 
@@ -64,8 +71,48 @@ export function normalizeVoterEmail(email: string): string {
  * string, so two definitions of "today" would be two different allowances.
  * Note for the free path: at UTC+1 the Nigerian day rolls over at 01:00 local.
  */
-export function voteDay(now: Date = new Date()): string {
-  return now.toISOString().slice(0, 10)
+export const DEFAULT_VOTE_TIME_ZONE = 'Africa/Lagos'
+
+/**
+ * Whether a string is an IANA zone this runtime can actually resolve. Used
+ * when a contest's zone is set, so a typo is refused at write time rather
+ * than silently shifting every free vote at read time.
+ */
+export function isValidTimeZone(timeZone: string): boolean {
+  if (timeZone.trim() === '') return false
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The calendar day a vote counts against — the bucket the daily free vote
+ * resets on, as 'YYYY-MM-DD'.
+ *
+ * Computed in the CONTEST'S OWN zone, not the server's. A Nigerian contest
+ * rolls over at local midnight; on a UTC server, a naive
+ * `toISOString().slice(0, 10)` would roll it over at 01:00 local instead,
+ * which is both wrong and invisible — the index would happily enforce the
+ * wrong day. 'en-CA' is used because it formats as YYYY-MM-DD natively.
+ *
+ * An unresolvable zone falls back to the default rather than throwing: a vote
+ * must not fail because a contest carries a bad string, and the fallback is
+ * the zone this platform operates in.
+ */
+export function voteDay(
+  timeZone: string = DEFAULT_VOTE_TIME_ZONE,
+  now: Date = new Date()
+): string {
+  const zone = isValidTimeZone(timeZone) ? timeZone : DEFAULT_VOTE_TIME_ZONE
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: zone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now)
 }
 
 // ─── The voting window ──────────────────────────────────────────────────────
@@ -446,6 +493,12 @@ export type VotePurchaseCredit = {
   // The balance afterwards.
   purchased: number
   spent: number
+  // True when the contest had already stopped accepting votes by the time the
+  // charge cleared. The credits exist and can never be spent, so the caller
+  // owes the buyer their money back — fulfilment records that obligation.
+  unusable: boolean
+  contestTitle: string
+  contestSlug: string
 }
 
 /**
@@ -497,6 +550,7 @@ export async function creditVotePurchase(
     .select({
       id: contests.id,
       title: contests.title,
+      slug: contests.slug,
       status: contests.status,
       votingOpensAt: contests.votingOpensAt,
       votingClosesAt: contests.votingClosesAt,
@@ -515,10 +569,12 @@ export async function creditVotePurchase(
   })
   if (!granted.granted) return { ok: false, reason: granted.reason }
 
-  if (!votingIsOpen(contest)) {
+  const unusable = !votingIsOpen(contest)
+  if (unusable) {
     // Paid for, credited, and unspendable: the contest closed or was
     // suspended between the payment link and the charge clearing. The money is
-    // real and nothing refunds it automatically, so it has to be visible.
+    // real, so fulfilment puts it on the Refunds Owed screen for a person to
+    // pay back — nothing refunds it automatically.
     console.error('[votes] credits granted to a contest that is not voting', {
       orderId: order.id,
       contestId: contest.id,
@@ -531,11 +587,77 @@ export async function creditVotePurchase(
   return {
     ok: true,
     credit: {
+      unusable,
+      contestTitle: contest.title,
+      contestSlug: contest.slug,
       contestId: contest.id,
       voterEmail,
       votesGranted: order.quantity,
       purchased: granted.balance.purchased,
       spent: granted.balance.spent,
     },
+  }
+}
+
+// ─── What the checkout return page shows ───────────────────────────────────
+
+export type VotesForOrder = {
+  contestTitle: string
+  contestSlug: string
+  // Votes this order bought.
+  votesBought: number
+  // Votes spendable right now, across every purchase for this contest.
+  votesRemaining: number
+  // Voting had already stopped when the charge cleared, so the balance cannot
+  // be spent and the money is owed back. The page must say so rather than
+  // invite them to vote.
+  unusable: boolean
+}
+
+/**
+ * The vote-purchase counterpart of `loadRegistrationForOrder`: everything the
+ * /checkout/return page needs, read after fulfilment has committed. Returns
+ * null when the order has no contest behind it, so the page can fall back
+ * rather than render half a screen.
+ */
+export async function loadVotesForOrder(order: {
+  referenceId: string | null
+  buyerEmail: string
+  quantity: number
+}): Promise<VotesForOrder | null> {
+  if (!order.referenceId) return null
+  const voterEmail = normalizeVoterEmail(order.buyerEmail)
+
+  const [contest] = await db
+    .select({
+      id: contests.id,
+      title: contests.title,
+      slug: contests.slug,
+      status: contests.status,
+      votingOpensAt: contests.votingOpensAt,
+      votingClosesAt: contests.votingClosesAt,
+    })
+    .from(contests)
+    .where(eq(contests.id, order.referenceId))
+    .limit(1)
+  if (!contest) return null
+
+  const [balance] = await db
+    .select({ purchased: voteCredits.purchased, spent: voteCredits.spent })
+    .from(voteCredits)
+    .where(
+      and(
+        eq(voteCredits.contestId, contest.id),
+        eq(voteCredits.voterEmail, voterEmail)
+      )
+    )
+    .limit(1)
+
+  return {
+    contestTitle: contest.title,
+    contestSlug: contest.slug,
+    votesBought: order.quantity,
+    votesRemaining: balance ? balance.purchased - balance.spent : 0,
+    unusable: !votingIsOpen(contest),
   }
 }

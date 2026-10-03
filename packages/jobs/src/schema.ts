@@ -254,3 +254,21 @@ export type SubmissionConfirmationPayload = z.infer<
 >
 export type SubmissionApprovedPayload = z.infer<typeof submissionApprovedSchema>
 export type SubmissionRejectedPayload = z.infer<typeof submissionRejectedSchema>
+
+// The receipt for a vote purchase.
+export const votePurchaseSchema = z.object({
+  email: z.email(),
+  voterName: z.string(),
+  contestTitle: z.string(),
+  eventTitle: z.string(),
+  votesGranted: z.number().int().min(0),
+  votesRemaining: z.number().int().min(0),
+  // Pre-formatted and inclusive of the service fee, so the email cannot
+  // disagree with what was charged.
+  amountPaid: z.string(),
+  contestUrl: z.string(),
+  // Voting had already closed when the payment cleared: the credits cannot be
+  // spent and the money is owed back.
+  unusable: z.boolean().default(false),
+})
+export type VotePurchasePayload = z.infer<typeof votePurchaseSchema>

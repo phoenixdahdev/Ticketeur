@@ -17,6 +17,7 @@ CREATE TABLE "contests" (
 	"voting_closes_at" timestamp,
 	"nominations_open_at" timestamp,
 	"nominations_close_at" timestamp,
+	"time_zone" text DEFAULT 'Africa/Lagos' NOT NULL,
 	"free_voting_enabled" boolean DEFAULT true NOT NULL,
 	"paid_voting_enabled" boolean DEFAULT true NOT NULL,
 	"price_per_vote_minor" integer DEFAULT 0 NOT NULL,

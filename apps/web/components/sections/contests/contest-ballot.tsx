@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { ChampionIcon } from '@hugeicons/core-free-icons'
+import { ChampionIcon, UserAdd01Icon } from '@hugeicons/core-free-icons'
 
 import { cn } from '@ticketur/ui/lib/utils'
 import { Button } from '@ticketur/ui/components/button'
@@ -12,6 +12,7 @@ import { useTRPC } from '@/lib/trpc'
 import { useSession } from '@/lib/auth-client'
 import { ContestEntryCard } from '@/components/sections/contests/contest-entry-card'
 import { Notice } from '@/components/sections/contests/contest-notice'
+import { NominateDialog } from '@/components/sections/contests/nominate-dialog'
 import {
   groupEntries,
   type ContestSection,
@@ -23,7 +24,8 @@ import { VoteFreeDialog } from '@/components/sections/contests/vote-free-dialog'
 import { VotePaidDialog } from '@/components/sections/contests/vote-paid-dialog'
 import { VoteWallet } from '@/components/sections/contests/vote-wallet'
 import {
-  describeVoting,
+  describePhase,
+  nominationsNow,
   type VotingTone,
 } from '@/components/sections/contests/voting-state'
 import {
@@ -67,7 +69,14 @@ export function ContestBallot({
     () => groupEntries(categories, entries),
     [categories, entries]
   )
-  const status = describeVoting(contest, voting)
+
+  // The browser's clock decides what is on screen; the server's decides what
+  // is allowed. See the note on `nominationsNow`. Computed once per render
+  // from the contest fields `bySlug` already ships, so no extra round trip —
+  // and re-derived on every refetch, which is how a window that closes while
+  // somebody is reading eventually shows through.
+  const nominations = nominationsNow(contest)
+  const status = describePhase(contest, voting, nominations)
 
   // ── Who is voting ─────────────────────────────────────────────────────────
   // Read after mount: localStorage is browser-only, and reading it during
@@ -108,6 +117,8 @@ export function ContestBallot({
   const remaining = castRemaining ?? balanceQuery.data?.remaining ?? null
 
   // ── Dialogs ───────────────────────────────────────────────────────────────
+  const [nominateIn, setNominateIn] = useState<string | null>(null)
+  const [nominateOpen, setNominateOpen] = useState(false)
   const [freeFor, setFreeFor] = useState<RankedEntry | null>(null)
   const [paidFor, setPaidFor] = useState<RankedEntry | null>(null)
   const [buyOpen, setBuyOpen] = useState(false)
@@ -125,6 +136,15 @@ export function ContestBallot({
   function refetchAll() {
     onRefetch()
     if (voterEmail) void balanceQuery.refetch()
+  }
+
+  // Nominating needs somewhere to nominate INTO. A contest with no category
+  // has nothing to put a name forward in, and the server refuses it anyway.
+  const canNominate = nominations.open && categories.length > 0
+
+  function openNominate(categoryId: string | null) {
+    setNominateIn(categoryId)
+    setNominateOpen(true)
   }
 
   return (
@@ -156,6 +176,32 @@ export function ContestBallot({
         ) : null}
       </section>
 
+      {canNominate ? (
+        <div className="border-primary/30 bg-card flex flex-col items-start gap-3 rounded-2xl border p-5">
+          <h2 className="font-heading text-foreground text-base font-bold tracking-tight">
+            Know someone who should be on this ballot?
+          </h2>
+          <p className="text-muted-foreground text-sm leading-6">
+            Put their name forward. The organizer reads every nomination and
+            decides who makes the ballot — nothing you write here is public, and
+            nominating is not voting.
+          </p>
+          <Button
+            type="button"
+            size="xl"
+            className="gap-1.5"
+            onClick={() => openNominate(null)}
+          >
+            <HugeiconsIcon
+              icon={UserAdd01Icon}
+              className="size-4"
+              strokeWidth={1.9}
+            />
+            Nominate someone
+          </Button>
+        </div>
+      ) : null}
+
       {voting.open && contest.paidVotingEnabled ? (
         <VoteWallet
           voterEmail={voterEmail}
@@ -170,8 +216,9 @@ export function ContestBallot({
 
       {sections.length === 0 || entries.length === 0 ? (
         <Notice tone="muted" icon={ChampionIcon}>
-          The entries for this contest haven’t been published yet. Check back
-          soon.
+          {nominations.open
+            ? 'Nobody is on the ballot yet — that is what the nomination phase is for. Names put forward now appear here once the organizer accepts them.'
+            : 'The entries for this contest haven’t been published yet. Check back soon.'}
         </Notice>
       ) : (
         <div className="flex flex-col gap-8">
@@ -184,6 +231,11 @@ export function ContestBallot({
               creditsRemaining={remaining}
               onVoteFree={setFreeFor}
               onVotePaid={setPaidFor}
+              onNominate={
+                canNominate && section.id !== '__ungrouped'
+                  ? () => openNominate(section.id)
+                  : null
+              }
             />
           ))}
         </div>
@@ -203,6 +255,18 @@ export function ContestBallot({
           </Button>
         </div>
       ) : null}
+
+      <NominateDialog
+        contestId={contest.id}
+        categories={categories}
+        defaultCategoryId={nominateIn}
+        defaultEmail={voterEmail ?? session.data?.user?.email ?? ''}
+        open={nominateOpen}
+        onOpenChange={setNominateOpen}
+        onNominated={onRefetch}
+        onStale={onRefetch}
+        onEmailUsed={identify}
+      />
 
       <VoteFreeDialog
         contestId={contest.id}
@@ -256,6 +320,7 @@ function CategorySection({
   creditsRemaining,
   onVoteFree,
   onVotePaid,
+  onNominate,
 }: {
   section: ContestSection
   votingOpen: boolean
@@ -263,23 +328,45 @@ function CategorySection({
   creditsRemaining: number | null
   onVoteFree: (entry: RankedEntry) => void
   onVotePaid: (entry: RankedEntry) => void
+  /** null while the contest is not taking nominations. */
+  onNominate: (() => void) | null
 }) {
   return (
     <section className="flex flex-col gap-3">
-      <div className="flex flex-col gap-1">
-        <h2 className="font-heading text-foreground text-xl font-bold tracking-tight">
-          {section.title}
-        </h2>
-        {section.description ? (
-          <p className="text-muted-foreground text-sm leading-6">
-            {section.description}
-          </p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="flex min-w-0 flex-col gap-1">
+          <h2 className="font-heading text-foreground text-xl font-bold tracking-tight">
+            {section.title}
+          </h2>
+          {section.description ? (
+            <p className="text-muted-foreground text-sm leading-6">
+              {section.description}
+            </p>
+          ) : null}
+        </div>
+        {onNominate ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="shrink-0 gap-1.5"
+            onClick={onNominate}
+          >
+            <HugeiconsIcon
+              icon={UserAdd01Icon}
+              className="size-4"
+              strokeWidth={1.9}
+            />
+            Nominate
+          </Button>
         ) : null}
       </div>
 
       {section.entries.length === 0 ? (
         <p className="text-muted-foreground text-sm">
-          No entries in this category yet.
+          {onNominate
+            ? 'Nobody has been accepted onto this category yet.'
+            : 'No entries in this category yet.'}
         </p>
       ) : (
         <ul className="flex flex-col gap-3">

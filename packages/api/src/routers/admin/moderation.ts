@@ -428,11 +428,12 @@ export const adminModerationRouter = createTRPCRouter({
           .where(FORM_PENDING)
           .orderBy(desc(forms.reviewRequestedAt))
           .limit(5),
-        // Oldest first, unlike the four above: `org.contests.submit` promises
-        // the organizer that resubmitting "goes to the back of the queue", and
-        // that is only true of a queue read front-to-back. The five picked here
-        // are therefore the five that have waited longest, and the merge below
-        // still puts them in the list by age.
+        // Newest first, like the four above — and unlike `pendingContests`,
+        // which is the real work queue and is worked oldest first. The merge
+        // below sorts every kind newest-first and keeps five, so picking the
+        // five OLDEST here would reliably sort them to the bottom and slice
+        // them straight off. This card answers "what has just come in"; the
+        // Contests tab answers "what is next".
         ctx.db
           .select({
             id: contests.id,
@@ -445,7 +446,7 @@ export const adminModerationRouter = createTRPCRouter({
           .from(contests)
           .innerJoin(events, eq(events.id, contests.eventId))
           .where(CONTEST_PENDING)
-          .orderBy(asc(contestQueuedAt))
+          .orderBy(desc(contestQueuedAt))
           .limit(5),
       ])
 

@@ -19,6 +19,7 @@ import {
   type PublicContest,
   type RankedEntry,
 } from '@/components/sections/contests/types'
+import type { PaidVoteCode } from '@/components/sections/contests/paid-vote-code'
 import { VoteBuyDialog } from '@/components/sections/contests/vote-buy-dialog'
 import { VoteFreeDialog } from '@/components/sections/contests/vote-free-dialog'
 import { VotePaidDialog } from '@/components/sections/contests/vote-paid-dialog'
@@ -55,9 +56,16 @@ const TONE_CLASS: Record<VotingTone, string> = {
 
 export function ContestBallot({
   data,
+  initialVoterEmail,
   onRefetch,
 }: {
   data: PublicContest
+  /**
+   * The address /checkout/return carried over from a payment made on this
+   * device, or null. Adopted only when this device has no remembered address
+   * for this contest — see the effect below.
+   */
+  initialVoterEmail: string | null
   /** Re-read bySlug: counts moved, or the server says we are stale. */
   onRefetch: () => void
 }) {
@@ -83,8 +91,24 @@ export function ContestBallot({
   // render would make the server and the first client render disagree.
   const [voterEmail, setVoterEmail] = useState<string | null>(null)
   useEffect(() => {
-    setVoterEmail(readVoterEmail(contest.id))
-  }, [contest.id])
+    const remembered = readVoterEmail(contest.id)
+    if (remembered !== null) {
+      setVoterEmail(remembered)
+      return
+    }
+    // Nothing remembered here. A voter who has just paid arrives from
+    // /checkout/return with the address the ORDER was placed under, which
+    // saves them retyping it on a device or browser that has not voted here
+    // before. It is only ever a convenience: the server reads this address
+    // out of the mutation body like any other, and the wallet's "Use a
+    // different email" undoes it. A remembered address always wins, so a
+    // crafted link cannot overwrite one.
+    if (initialVoterEmail !== null) {
+      const normalized = normalizeEmail(initialVoterEmail)
+      setVoterEmail(normalized)
+      writeVoterEmail(contest.id, normalized)
+    }
+  }, [contest.id, initialVoterEmail])
 
   function identify(email: string) {
     const normalized = normalizeEmail(email)
@@ -112,6 +136,20 @@ export function ContestBallot({
   const [castRemaining, setCastRemaining] = useState<number | null>(null)
   useEffect(() => {
     setCastRemaining(null)
+  }, [voterEmail])
+
+  // ── The spending session ──────────────────────────────────────────────────
+  // `castPaid` wants a one-time code and does not consume it, so one code
+  // covers several casts for a few minutes (see paid-vote-code.ts). It is
+  // held HERE rather than in the dialog so that closing the dialog and
+  // opening it on the next entry does not throw the credential away — that
+  // is the whole of what makes splitting a balance bearable.
+  //
+  // Memory only, and it goes when the address does: a code is minted for one
+  // (contest, email) and is worthless under another.
+  const [paidCode, setPaidCode] = useState<PaidVoteCode | null>(null)
+  useEffect(() => {
+    setPaidCode(null)
   }, [voterEmail])
 
   const remaining = castRemaining ?? balanceQuery.data?.remaining ?? null
@@ -287,6 +325,7 @@ export function ContestBallot({
         entry={paidFor}
         voterEmail={voterEmail ?? ''}
         creditsRemaining={remaining ?? 0}
+        heldCode={paidCode}
         open={paidFor !== null}
         onOpenChange={(open) => {
           if (!open) setPaidFor(null)
@@ -295,6 +334,7 @@ export function ContestBallot({
           setCastRemaining(left)
           refetchAll()
         }}
+        onCodeHeld={setPaidCode}
         onStale={refetchAll}
       />
 

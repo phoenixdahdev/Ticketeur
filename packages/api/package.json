@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "lint": "eslint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import ./src/test-support/ts-resolve-hook.ts --test \"src/**/*.test.ts\" \"src/**/*.spec.ts\""
   },
   "exports": {
     ".": "./src/index.ts",

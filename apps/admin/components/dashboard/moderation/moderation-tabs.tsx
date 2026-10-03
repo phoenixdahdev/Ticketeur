@@ -12,6 +12,8 @@ import { ModerationEventsTable } from '@/components/dashboard/moderation/moderat
 import { ModerationEventEditsTable } from '@/components/dashboard/moderation/moderation-event-edits-table'
 import { ModerationFormsTable } from '@/components/dashboard/moderation/moderation-forms-table'
 import { ModerationLiveFormsTable } from '@/components/dashboard/moderation/moderation-live-forms-table'
+import { ModerationContestsTable } from '@/components/dashboard/moderation/moderation-contests-table'
+import { ModerationLiveContestsTable } from '@/components/dashboard/moderation/moderation-live-contests-table'
 import { FlaggedActivitiesList } from '@/components/dashboard/moderation/flagged-activities-list'
 
 const TABS = [
@@ -20,6 +22,8 @@ const TABS = [
   'edits',
   'forms',
   'live-forms',
+  'contests',
+  'live-contests',
   'flagged',
 ] as const
 type Tab = (typeof TABS)[number]
@@ -30,6 +34,8 @@ const TAB_LABELS: Record<Tab, string> = {
   edits: 'Event Edits',
   forms: 'Forms',
   'live-forms': 'Live Forms',
+  contests: 'Contests',
+  'live-contests': 'Live Contests',
   flagged: 'Flagged Activities',
 }
 
@@ -66,6 +72,20 @@ export function ModerationTabs() {
   const liveFormsQuery = useQuery(
     trpc.admin.moderation.liveForms.queryOptions(undefined, {
       enabled: tab === 'live-forms',
+    })
+  )
+  // Contests waiting for an admin, OLDEST first (the server orders them):
+  // an organizer who resubmits is told they go to the back of the queue.
+  const contestsQuery = useQuery(
+    trpc.admin.moderation.pendingContests.queryOptions(undefined, {
+      enabled: tab === 'contests',
+    })
+  )
+  // Contests already public, so an approved contest that turns out to be a
+  // problem can be found and taken down. Not a queue.
+  const liveContestsQuery = useQuery(
+    trpc.admin.moderation.liveContests.queryOptions(undefined, {
+      enabled: tab === 'live-contests',
     })
   )
   const flaggedQuery = useQuery(
@@ -135,6 +155,16 @@ export function ModerationTabs() {
           <ModerationLiveFormsTable
             rows={liveFormsQuery.data ?? []}
             loading={liveFormsQuery.isLoading}
+          />
+        ) : tab === 'contests' ? (
+          <ModerationContestsTable
+            rows={contestsQuery.data ?? []}
+            loading={contestsQuery.isLoading}
+          />
+        ) : tab === 'live-contests' ? (
+          <ModerationLiveContestsTable
+            rows={liveContestsQuery.data ?? []}
+            loading={liveContestsQuery.isLoading}
           />
         ) : (
           <FlaggedActivitiesList

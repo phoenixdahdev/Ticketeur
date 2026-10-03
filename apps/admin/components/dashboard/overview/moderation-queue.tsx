@@ -63,6 +63,9 @@ export function ModerationQueue() {
       queryKey: trpc.admin.moderation.pendingForms.queryKey(),
     })
     queryClient.invalidateQueries({
+      queryKey: trpc.admin.moderation.pendingContests.queryKey(),
+    })
+    queryClient.invalidateQueries({
       queryKey: trpc.admin.overview.stats.queryKey(),
     })
   }
@@ -132,6 +135,19 @@ export function ModerationQueue() {
     })
   )
 
+  const rejectContestMut = useMutation(
+    trpc.admin.moderation.rejectContest.mutationOptions({
+      onSuccess: () => {
+        toast.success('Contest rejected', {
+          description: 'The organizer has been emailed the reason.',
+        })
+        invalidate()
+      },
+      onError: (e) =>
+        toast.error('Could not reject', { description: e.message }),
+    })
+  )
+
   const dismissFlagMut = useMutation(
     trpc.admin.moderation.dismissFlag.mutationOptions({
       onSuccess: () => {
@@ -149,14 +165,22 @@ export function ModerationQueue() {
     approveEventMut.isPending ||
     rejectEventMut.isPending ||
     rejectFormMut.isPending ||
+    rejectContestMut.isPending ||
     dismissFlagMut.isPending
 
   const dialog = useActionDialog()
 
   async function handleApprove(item: QueueItem) {
     if (busy) return
-    // A form is approved from its review page, after reading its questions.
-    if (item.kind === 'report' || item.kind === 'form') {
+    // A form is approved from its review page, after reading its questions,
+    // and a contest from its own after reading the whole ballot. Neither can
+    // be approved here: the server demands the revision that was SHOWN, and
+    // this row has not shown anything.
+    if (
+      item.kind === 'report' ||
+      item.kind === 'form' ||
+      item.kind === 'contest'
+    ) {
       router.push(item.href)
       return
     }
@@ -203,6 +227,22 @@ export function ModerationQueue() {
       })
       if (reason === null) return
       rejectFormMut.mutate({ id: item.id, reason: reason.trim() })
+      return
+    }
+    if (item.kind === 'contest') {
+      const reason = await dialog.prompt({
+        title: `Reject "${item.title}"?`,
+        description:
+          'The contest stays offline and takes no votes. The organizer is emailed this reason so they can fix it and resubmit.',
+        inputLabel: 'Reason',
+        placeholder:
+          'What on the ballot, or in the pricing, needs to change before this can be approved?',
+        confirmLabel: 'Reject',
+        tone: 'danger',
+        required: true,
+      })
+      if (reason === null) return
+      rejectContestMut.mutate({ id: item.id, reason: reason.trim() })
       return
     }
     const reason = await dialog.prompt({
@@ -318,7 +358,7 @@ export function ModerationQueue() {
                     label={
                       item.kind === 'report'
                         ? 'Open'
-                        : item.kind === 'form'
+                        : item.kind === 'form' || item.kind === 'contest'
                           ? 'Review to approve'
                           : 'Approve'
                     }

@@ -38,6 +38,7 @@ import { MarkdownView } from '@ticketur/ui/components/markdown-view'
 
 import { EventGuestList } from '@/components/dashboard/event-guest-list'
 import { EventFormsPanel } from '@/components/dashboard/forms/event-forms-panel'
+import { EventContestsPanel } from '@/components/dashboard/contests/event-contests-panel'
 import { useTRPC } from '@/lib/trpc'
 import { STATUS_LABEL, STATUS_TONE, type EventStatus } from '@/lib/org-events'
 import {
@@ -387,6 +388,10 @@ export function EventDetail({ id }: { id: string }) {
 
       <Section title="Registration Forms">
         <EventFormsPanel eventId={event.id} />
+      </Section>
+
+      <Section title="Contests & Voting">
+        <EventContestsPanel eventId={event.id} />
       </Section>
 
       <Section title="Guest List">

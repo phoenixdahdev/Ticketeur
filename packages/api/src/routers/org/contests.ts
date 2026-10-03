@@ -2,7 +2,7 @@ import { TRPCError } from '@trpc/server'
 import { and, asc, desc, eq, gt, notExists, sql } from 'drizzle-orm'
 import { z } from 'zod'
 
-import type { Database } from '@ticketur/db'
+import type { ContestStatus, Database } from '@ticketur/db'
 import {
   contestCategories,
   contests,
@@ -159,6 +159,38 @@ const countColumns = {
 }
 
 // ─── Submit preconditions ───────────────────────────────────────────────────
+
+/**
+ * A closed contest whose results people have already seen must not be taken
+ * off the air.
+ *
+ * Submitting moves a contest to 'pending_review', which is NOT in the public
+ * allow-list — so sending a finished contest back for review would blank its
+ * results page for however long an admin takes. On an awards page people keep
+ * revisiting, that reads as the result being withdrawn.
+ *
+ * The line is whether anyone actually voted. A contest closed with no votes is
+ * an organizer fixing a mistake and there is nothing public to protect, so it
+ * may still be resubmitted. Once a vote exists the result is a public record,
+ * and changing it is not an organizer's call to make alone.
+ */
+async function assertResultsStayPublic(
+  db: Database,
+  contest: { id: string; status: ContestStatus }
+): Promise<void> {
+  if (contest.status !== 'closed') return
+  const [cast] = await db
+    .select({ count: sql<number>`COUNT(*)::int` })
+    .from(votes)
+    .where(eq(votes.contestId, contest.id))
+  if ((cast?.count ?? 0) > 0) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message:
+        'People have already voted in this contest, and its results are public. Reopening it would hide them while an admin reviews, so it has to go through Ticketeur support.',
+    })
+  }
+}
 
 async function assertReadyToSubmit(
   db: Database,
@@ -425,6 +457,7 @@ export const orgContestsRouter = createTRPCRouter({
       const { contest, event } = await requireOwnedContest(ctx, input.id)
       assertSubmittable(contest.status)
       assertEventAcceptsContests(event)
+      await assertResultsStayPublic(ctx.db, contest)
       await assertReadyToSubmit(ctx.db, contest, 'submitting it')
 
       const now = new Date()

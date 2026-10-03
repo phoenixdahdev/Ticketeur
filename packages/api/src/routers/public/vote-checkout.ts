@@ -245,6 +245,7 @@ export const publicVoteCheckoutRouter = createTRPCRouter({
         contestTitle: contest.title,
         eventTitle: event.title,
         contestUrl: `${getBaseUrl()}/contests/${contest.slug}`,
+        purpose: 'paid_vote',
       })
 
       return {

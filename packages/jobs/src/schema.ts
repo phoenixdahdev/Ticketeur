@@ -287,6 +287,12 @@ export const voteCodeSchema = z.object({
   // Minutes the code is good for, from VOTE_CODE_TTL_MINUTES, so the email
   // and the verifier cannot disagree about how long the voter has.
   expiresInMinutes: z.number().int().min(1).default(10),
+  // What the code is for. The same code verifies either act (vote_otps has no
+  // purpose column), but the email has to describe the one the voter asked
+  // for: a paid voter told "free voting is one vote per day" is being given
+  // the wrong rules for what they are about to do. Defaults to the free vote,
+  // so an older queued payload still reads exactly as it did.
+  purpose: z.enum(['free_vote', 'paid_vote']).default('free_vote'),
 })
 export type VoteCodePayload = z.infer<typeof voteCodeSchema>
 

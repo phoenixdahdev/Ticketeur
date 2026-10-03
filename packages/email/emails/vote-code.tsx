@@ -13,6 +13,9 @@ interface VoteCodeEmailProps {
   // How long the code is good for, from VOTE_CODE_TTL_MINUTES, so this email
   // cannot promise a window the verifier will not honour.
   expiresInMinutes: number
+  // Which act the code was asked for. The same code verifies either, but the
+  // email must describe the one the voter requested.
+  purpose: 'free_vote' | 'paid_vote'
 }
 
 export default function VoteCodeEmail({
@@ -21,7 +24,9 @@ export default function VoteCodeEmail({
   eventTitle = 'the event',
   contestUrl = '',
   expiresInMinutes = 10,
+  purpose = 'free_vote',
 }: Partial<VoteCodeEmailProps>) {
+  const paid = purpose === 'paid_vote'
   return (
     <EmailContainer
       preview={<Preview>{`Your voting code for ${contestTitle}`}</Preview>}
@@ -32,7 +37,8 @@ export default function VoteCodeEmail({
         </Heading>
 
         <Text className="m-0 mb-6 text-base leading-6 text-gray-700">
-          Enter this code to cast your free vote in{' '}
+          Enter this code to{' '}
+          {paid ? 'spend the votes you bought' : 'cast your free vote'} in{' '}
           <strong>{contestTitle}</strong> at {eventTitle}.
         </Text>
 
@@ -45,16 +51,25 @@ export default function VoteCodeEmail({
             <strong>
               {expiresInMinutes} {expiresInMinutes === 1 ? 'minute' : 'minutes'}
             </strong>
-            , and works once.
+            {paid ? '.' : ', and works once.'}
           </Text>
         </Section>
 
         <Section className="mb-6 rounded-lg bg-gray-50 px-5 py-4">
-          <Text className="m-0 text-sm leading-5 text-gray-700">
-            Free voting is <strong>one vote per category, per day</strong>. Come
-            back tomorrow to vote again — or buy votes on the contest page if
-            you would rather not wait.
-          </Text>
+          {paid ? (
+            <Text className="m-0 text-sm leading-5 text-gray-700">
+              Your votes are already paid for — this code just proves the
+              address is yours. One code covers <strong>up to 5 casts</strong>,
+              so you can split your votes across entries without asking for a
+              new one. Request another if it runs out or expires.
+            </Text>
+          ) : (
+            <Text className="m-0 text-sm leading-5 text-gray-700">
+              Free voting is <strong>one vote per category, per day</strong>.
+              Come back tomorrow to vote again — or buy votes on the contest
+              page if you would rather not wait.
+            </Text>
+          )}
         </Section>
 
         {contestUrl ? (
@@ -86,6 +101,7 @@ VoteCodeEmail.PreviewProps = {
   eventTitle: 'Haiku Festival',
   contestUrl: 'https://www.useticketeur.com/contests/face-of-haiku-2026',
   expiresInMinutes: 10,
+  purpose: 'free_vote',
 } satisfies VoteCodeEmailProps
 
 export { VoteCodeEmail }

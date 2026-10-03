@@ -18,6 +18,7 @@ export const sendVoteCodeTask = task({
         eventTitle: data.eventTitle,
         contestUrl: data.contestUrl,
         expiresInMinutes: data.expiresInMinutes,
+        purpose: data.purpose,
       })
     )
 

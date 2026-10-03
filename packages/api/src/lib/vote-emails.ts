@@ -107,12 +107,15 @@ export async function sendVoteCode(args: {
   contestTitle: string
   eventTitle: string
   contestUrl: string
+  // Omitted means the free vote, which is what every existing caller meant.
+  purpose?: 'free_vote' | 'paid_vote'
 }): Promise<void> {
   try {
     if (args.email.trim() === '') return
     await tasks.trigger('send-vote-code', {
       email: args.email,
       code: args.code,
+      purpose: args.purpose ?? 'free_vote',
       contestTitle: args.contestTitle,
       eventTitle: args.eventTitle,
       contestUrl: args.contestUrl,

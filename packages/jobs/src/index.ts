@@ -19,6 +19,7 @@ export {
   adminBroadcastSchema,
   votePurchaseSchema,
   voteCodeSchema,
+  nominationCodeSchema,
 } from './schema'
 export type {
   VerificationOtpPayload,
@@ -41,6 +42,7 @@ export type {
   AdminBroadcastPayload,
   VotePurchasePayload,
   VoteCodePayload,
+  NominationCodePayload,
 } from './schema'
 export {
   formApprovedSchema,

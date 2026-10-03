@@ -9,5 +9,7 @@ export {
   adminProcedure,
   createCallerFactory,
   createTRPCContext,
+  rateLimitResponseMeta,
+  isRateLimitError,
 } from './trpc'
 export type { Context } from './trpc'

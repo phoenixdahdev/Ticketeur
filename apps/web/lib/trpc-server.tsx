@@ -21,7 +21,13 @@ import { auth } from './auth'
 // whose key doesn't match its client caller is simply unused — never an error.
 export const getServerTRPC = cache(async () => {
   const session = await auth.api.getSession({ headers: await headers() })
-  const ctx = await createTRPCContext({ session })
+  // `headers: null` marks this as an in-process caller, which exempts it from
+  // the rate limiting on public procedures (packages/api/src/lib/rate-limit.ts).
+  // A prefetch is work this server chose to do while rendering a page, not a
+  // request a stranger made: charging it to the visitor's budget would have a
+  // busy page throttling itself, and the page request it belongs to is not
+  // something a tRPC middleware can see in the first place.
+  const ctx = await createTRPCContext({ session, headers: null })
   const queryClient = getQueryClient()
   const trpc = createTRPCOptionsProxy({ ctx, router: appRouter, queryClient })
   return { trpc, queryClient }

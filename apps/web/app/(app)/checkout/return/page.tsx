@@ -162,6 +162,10 @@ export default async function CheckoutReturnPage({
                 : 'processing'
           }
           reference={orderRef(order.id)}
+          // The address the credits were granted to. Carried into the ballot
+          // link so the buyer is not asked to type it again on the page they
+          // were just sent to.
+          buyerEmail={head.order.buyerEmail}
           votes={bought}
         />
       )
@@ -523,17 +527,31 @@ function RegistrationScreen({
   )
 }
 
-// An order type with no fulfilment yet. Nothing was delivered, and nothing
-// here suggests tickets.
+// What a vote purchase bought, and the way to spend it.
+//
+// The link back to the ballot carries `?voter=` so the balance is on screen
+// the moment they land — the credits hang on the email and nothing else, and
+// a buyer who paid in a browser that has never voted here would otherwise be
+// asked to type it again having just typed it into Flutterwave. It is a
+// convenience and no more: spending still wants a one-time code
+// (packages/api/src/routers/public/vote-checkout.ts), which the copy below
+// says out loud so the step is expected rather than suspicious.
 function VotesScreen({
   state,
   reference,
+  buyerEmail,
   votes,
 }: {
   state: 'paid' | 'processing' | 'unconfirmed'
   reference: string
+  buyerEmail: string
   votes: VotesForOrder
 }) {
+  const ballotUrl = `/contests/${votes.contestSlug}${
+    buyerEmail.trim() === ''
+      ? ''
+      : `?voter=${encodeURIComponent(buyerEmail.trim().toLowerCase())}`
+  }`
   if (state !== 'paid') {
     return (
       <section className="mx-auto flex w-full max-w-180 flex-col items-center gap-6 px-6 py-20 text-center md:py-28">
@@ -552,9 +570,10 @@ function VotesScreen({
           {reference}.
         </p>
         <Button asChild size="xl">
-          <Link href={`/contests/${votes.contestSlug}`}>
-            Back to the contest
-          </Link>
+          {/* Same link as the paid screen's: a charge that clears while they
+              are reading should put the balance in front of them, not an
+              empty wallet asking who they are. */}
+          <Link href={ballotUrl}>Back to the contest</Link>
         </Button>
       </section>
     )
@@ -607,8 +626,14 @@ function VotesScreen({
         them on one entry or split them across several — it&apos;s up to you.
       </p>
       <Button asChild size="xl">
-        <Link href={`/contests/${votes.contestSlug}`}>Cast your votes</Link>
+        <Link href={ballotUrl}>Cast your votes</Link>
       </Button>
+      <p className="text-muted-foreground max-w-prose text-xs leading-6">
+        Your votes are held against{' '}
+        <strong className="text-foreground break-all">{buyerEmail}</strong>.
+        We&apos;ll email that address a 6-digit code the first time you spend
+        them, so nobody else can — one code covers the next several votes.
+      </p>
       <p className="text-muted-foreground text-xs">Order {reference}</p>
     </section>
   )

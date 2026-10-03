@@ -96,10 +96,28 @@ export async function generateMetadata(
   }
 }
 
+/**
+ * `?voter=` — the address /checkout/return carries over after a vote
+ * purchase, so the ballot can show the balance without asking for it again.
+ *
+ * Read defensively and passed no further than the client component, which
+ * only adopts it when this device has no remembered address for this contest
+ * (see contest-ballot.tsx). It authorises nothing: every mutation carries the
+ * address in its own body and `castPaid` wants a one-time code regardless.
+ */
+function voterParam(value: string | string[] | undefined): string | null {
+  const first = Array.isArray(value) ? value[0] : value
+  if (typeof first !== 'string') return null
+  const email = first.trim().toLowerCase()
+  if (email === '' || email.length > 320 || !email.includes('@')) return null
+  return email
+}
+
 export default async function PublicContestPage(
   props: PageProps<'/contests/[slug]'>
 ) {
   const { slug } = await props.params
+  const { voter } = await props.searchParams
 
   // Also the prefetch — see loadContest. null means no such contest, one
   // still in draft or under review, one an admin has suspended, or an event
@@ -112,7 +130,7 @@ export default async function PublicContestPage(
   return (
     <HydrateClient>
       <section className="mx-auto flex w-full max-w-200 flex-col px-5 py-8 md:py-12">
-        <ContestPageContent slug={slug} />
+        <ContestPageContent slug={slug} initialVoterEmail={voterParam(voter)} />
       </section>
     </HydrateClient>
   )

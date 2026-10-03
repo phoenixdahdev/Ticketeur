@@ -32,7 +32,18 @@ import { totalVotes } from '@/components/sections/contests/types'
 // costs nothing.
 const LIVE_REFRESH_MS = 20_000
 
-export function ContestPageContent({ slug }: { slug: string }) {
+export function ContestPageContent({
+  slug,
+  initialVoterEmail = null,
+}: {
+  slug: string
+  /**
+   * `?voter=` off the /checkout/return link, so somebody who has just paid
+   * is not asked for the address they paid with. Threaded through rather
+   * than read here because this component is also rendered without one.
+   */
+  initialVoterEmail?: string | null
+}) {
   const trpc = useTRPC()
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
     ...trpc.public.contests.bySlug.queryOptions({ slug }),
@@ -62,7 +73,11 @@ export function ContestPageContent({ slug }: { slug: string }) {
         entryCount={data.entries.length}
         votesCast={totalVotes(data.entries)}
       />
-      <ContestBallot data={data} onRefetch={() => void refetch()} />
+      <ContestBallot
+        data={data}
+        initialVoterEmail={initialVoterEmail}
+        onRefetch={() => void refetch()}
+      />
     </div>
   )
 }

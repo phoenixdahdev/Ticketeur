@@ -131,8 +131,12 @@ async function photoFromSubmission(
  * contest's lock. Shared by `promote` and `add`, so a hand-typed entry and a
  * promoted one land identically — the only difference is whether there is a
  * submission behind it.
+ *
+ * Exported for ./contest-nominations.ts, which promotes an approved
+ * NOMINATION the same way. Three sources, one statement: a second copy would
+ * be a second answer to "what is on the ballot and in what order".
  */
-async function insertEntry(
+export async function insertEntry(
   tx: DbTransaction,
   locked: LockedContest,
   values: {

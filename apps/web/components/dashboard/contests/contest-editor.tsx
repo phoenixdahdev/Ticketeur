@@ -38,6 +38,7 @@ import {
 import { BundlesEditor } from '@/components/dashboard/contests/bundles-editor'
 import { CategoriesEditor } from '@/components/dashboard/contests/categories-editor'
 import { EntriesEditor } from '@/components/dashboard/contests/entries-editor'
+import { NominationsPanel } from '@/components/dashboard/contests/nominations-panel'
 import {
   ContestStatusBadge,
   ReviewStateNotice,
@@ -259,6 +260,15 @@ export function ContestEditor({ id }: { id: string }) {
           contestId={contest.id}
           categories={categories}
           entries={entries}
+          isLive={isLive}
+          contentLocked={contentLocked}
+          report={report}
+          onChanged={invalidate}
+        />
+        <NominationsPanel
+          contestId={contest.id}
+          contest={contest}
+          categories={categories}
           isLive={isLive}
           contentLocked={contentLocked}
           report={report}

@@ -4,6 +4,7 @@ import { publicCheckoutRouter } from './checkout'
 import { publicContestDiscoveryRouter } from './contest-discovery'
 import { publicContestsRouter } from './contests'
 import { publicEventsRouter } from './events'
+import { publicNominationsRouter } from './nominations'
 import { publicVendorsRouter } from './vendors'
 import { publicReviewsRouter } from './reviews'
 import { publicVouchersRouter } from './vouchers'
@@ -21,6 +22,7 @@ export const publicRouter = createTRPCRouter({
   forms: publicFormsRouter,
   contests: publicContestsRouter,
   contestDiscovery: publicContestDiscoveryRouter,
+  nominations: publicNominationsRouter,
   voteCheckout: publicVoteCheckoutRouter,
   voteBalance: publicVoteBalanceRouter,
   voteFree: publicVoteFreeRouter,

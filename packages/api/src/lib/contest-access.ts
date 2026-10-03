@@ -6,6 +6,7 @@ import {
   contests,
   entries,
   events,
+  nominations,
   voteBundles,
 } from '@ticketur/db'
 
@@ -85,6 +86,17 @@ export function callerOwnsEntry(ctx: OrganizerContext): SQL {
       .from(contests)
       .innerJoin(events, eq(events.id, contests.eventId))
       .where(and(eq(contests.id, entries.contestId), managedEvents(ctx)))
+  )
+}
+
+/** The same, for a statement on `nominations`. */
+export function callerOwnsNomination(ctx: OrganizerContext): SQL {
+  return exists(
+    ctx.db
+      .select({ ok: sql`1` })
+      .from(contests)
+      .innerJoin(events, eq(events.id, contests.eventId))
+      .where(and(eq(contests.id, nominations.contestId), managedEvents(ctx)))
   )
 }
 
@@ -180,6 +192,21 @@ export async function requireOwnedEntry(
     .innerJoin(contests, eq(contests.id, entries.contestId))
     .innerJoin(events, eq(events.id, contests.eventId))
     .where(and(eq(entries.id, entryId), managedEvents(ctx)))
+    .limit(1)
+  if (!row) throw new TRPCError({ code: 'NOT_FOUND' })
+  return row
+}
+
+export async function requireOwnedNomination(
+  ctx: OrganizerContext,
+  nominationId: string
+) {
+  const [row] = await ctx.db
+    .select({ nomination: nominations, event: eventColumns })
+    .from(nominations)
+    .innerJoin(contests, eq(contests.id, nominations.contestId))
+    .innerJoin(events, eq(events.id, contests.eventId))
+    .where(and(eq(nominations.id, nominationId), managedEvents(ctx)))
     .limit(1)
   if (!row) throw new TRPCError({ code: 'NOT_FOUND' })
   return row

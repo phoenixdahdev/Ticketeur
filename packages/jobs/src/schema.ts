@@ -290,6 +290,23 @@ export const voteCodeSchema = z.object({
 })
 export type VoteCodePayload = z.infer<typeof voteCodeSchema>
 
+// The one-time code that proves the email behind a NOMINATION
+// (packages/api/src/routers/public/nominations.ts). The same `vote_otps`
+// machinery and the same shape as the free-vote code above — a separate
+// payload only because the email it renders says something different: a
+// nominator is putting a name forward, not casting a vote.
+export const nominationCodeSchema = z.object({
+  email: z.email(),
+  // Six digits as a string, so a leading zero survives the round trip.
+  code: z.string().regex(/^\d{4,8}$/),
+  contestTitle: z.string(),
+  eventTitle: z.string(),
+  contestUrl: z.string(),
+  // Minutes the code is good for, from VOTE_CODE_TTL_MINUTES.
+  expiresInMinutes: z.number().int().min(1).default(10),
+})
+export type NominationCodePayload = z.infer<typeof nominationCodeSchema>
+
 // ─── Contest review ────────────────────────────────────────────────────────
 // Sent to the organizer when an admin decides a contest
 // (packages/api/src/lib/contest-emails.ts). The same three shapes as the form

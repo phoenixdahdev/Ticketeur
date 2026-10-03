@@ -1,3 +1,8 @@
+import {
+  nominationAvailability,
+  type NominationAvailability,
+} from '@ticketur/api/lib/nominations'
+
 import { formatLongDate } from '@/lib/date'
 import type {
   ContestSummary,
@@ -17,6 +22,91 @@ import type {
 // seconds, not hours.
 
 export type VotingTone = 'open' | 'waiting' | 'ended'
+
+// ─── The phase this contest is in ───────────────────────────────────────────
+
+// A contest now has four states a visitor can be in front of, and the panel
+// at the top of the ballot has to name the right one:
+//
+//   nominations open  — put a name forward; nobody is voting yet.
+//   nominations done, voting not open — the organizer is going through the
+//     names; the ballot is not final.
+//   voting open       — the entries are the ballot and the counts are live.
+//   closed            — the results stay up.
+//
+// `nominationAvailability` is the SERVER'S own rule (packages/api/src/lib/
+// nominations.ts), imported rather than reimplemented. Unlike
+// `votingAvailability` it can be — that module touches nothing but types, so
+// it bundles for a browser, which is exactly why it was written that way.
+//
+// It is evaluated here against the BROWSER'S clock, which is the one
+// compromise. It decides what is on screen and nothing else: every write
+// goes back through the same function on the server, with the server's
+// clock, and the server's refusal is what the page then renders. A page left
+// open past the closing time offers a form that is turned away in a
+// sentence — the same trade `describeVoting` already documents for voting.
+
+/** Whether this contest takes nominations right now, by the browser's clock. */
+export function nominationsNow(
+  contest: ContestSummary,
+  now: Date = new Date()
+): NominationAvailability {
+  return nominationAvailability(contest, now)
+}
+
+/**
+ * The one panel at the top of the ballot, for whichever phase the contest is
+ * in. Nominations take precedence while they are open: a visitor who can put
+ * a name forward should be told that first, not told about a vote they
+ * cannot cast yet.
+ */
+export function describePhase(
+  contest: ContestSummary,
+  voting: VotingAvailability,
+  nominations: NominationAvailability
+): VotingDescription {
+  if (nominations.open) {
+    const closes = contest.nominationsCloseAt
+      ? formatLongDate(contest.nominationsCloseAt)
+      : null
+    return {
+      tone: 'open',
+      eyebrow: 'Nominations are open',
+      title: closes ? `Nominations close ${closes}` : 'Nominations are open',
+      body: closes
+        ? `Put a name forward before ${closes}. The organizer reads every nomination and decides who goes on the ballot — voting comes after that.`
+        : 'Put a name forward below. The organizer reads every nomination and decides who goes on the ballot — voting comes after that.',
+    }
+  }
+
+  // Nominations have been and gone, and voting has not started. Without this
+  // the page would say "voting opens soon" and leave a visitor wondering
+  // what happened to the names they put forward.
+  if (
+    !voting.open &&
+    voting.reason === 'not_open_yet' &&
+    nominations.reason === 'closed'
+  ) {
+    const closed = contest.nominationsCloseAt
+      ? formatLongDate(contest.nominationsCloseAt)
+      : null
+    const opens = contest.votingOpensAt
+      ? formatLongDate(contest.votingOpensAt)
+      : null
+    return {
+      tone: 'waiting',
+      eyebrow: 'Nominations closed',
+      title: opens ? `Voting opens ${opens}` : 'Voting opens soon',
+      body: `${
+        closed ? `Nominations closed ${closed}.` : 'Nominations have closed.'
+      } The organizer is going through the names that were put forward${
+        opens ? `, and voting opens ${opens}` : ''
+      }. The ballot below is not final until then.`,
+    }
+  }
+
+  return describeVoting(contest, voting)
+}
 
 export type VotingDescription = {
   tone: VotingTone

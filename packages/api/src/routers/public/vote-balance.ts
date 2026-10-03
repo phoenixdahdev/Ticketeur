@@ -17,21 +17,42 @@ import { loadPublicContest } from './contests'
 // are holding. This is the read that closes that, and it does nothing else:
 // no mutation, no money, no new column.
 //
-// ── What it discloses, and why that is not new ──
-// The identity a vote balance hangs on is the lower-cased email and nothing
-// more: `castPaid` takes `{ contestId, entryId, voterEmail, quantity }` with
-// no session and no code, so anyone who knows an address can already SPEND
-// that address's credits. A read that only says how many are left is strictly
-// less than what the mutation beside it already allows, and it is the same
-// figure `castPaid` hands back. It is deliberately the whole surface: no name,
-// no order, no purchase history, nothing that is not a count.
+// ── Why this is still public, now that castPaid is not ──
+// This procedure used to lean on the hole: "anyone who knows an address can
+// already SPEND that address's credits, so a read of the count discloses
+// strictly less". `castPaid` now demands a one-time code, so that argument is
+// gone and this one has to stand on its own feet. It does, for three reasons:
+//
+//   1. It cannot be turned into a spend. The only thing it emits is a number,
+//      and the mutation beside it no longer accepts anything this returns.
+//   2. Gating it would put the verification in front of the INFORMATION
+//      rather than in front of the spend — a voter back from Flutterwave
+//      could not be told what they had just paid for until they fetched a
+//      code for a page that is only going to say "37". Codes are rationed six
+//      an hour and a read must not eat one.
+//   3. The caller must already know the address. There is no listing here, no
+//      search, no "who holds credits in this contest".
+//
+// ── What was narrowed ──
+// The response is now the REMAINING count alone. `purchased` and `spent` were
+// a lifetime spend figure for an address in a contest — "this campaign has
+// bought 4,000 votes" is the one genuinely sensitive thing a count can carry,
+// nobody rendered it, and a public read should not offer what nothing asked
+// for.
+//
+// The disclosure that remains, named rather than buried: someone who knows
+// both a contest and an address learns how many unspent votes that address is
+// holding, and therefore that it bought some. That is an unauthenticated
+// privacy leak of a purchase fact, and the price of showing a guest voter
+// their own balance without an account. It is the whole surface: no name, no
+// order, no history, nothing that is not a count.
 //
 // Through `loadPublicContest`, so a draft, rejected or suspended contest
 // cannot be probed for whether an address has credits in it — the one gate,
 // not a second definition of "public".
 export const publicVoteBalanceRouter = createTRPCRouter({
   // null — no such contest, or it isn't public. Otherwise the balance, which
-  // is all zeroes for an address that has never bought anything (there is no
+  // is zero for an address that has never bought anything (there is no
   // vote_credits row until a purchase is fulfilled, and "never bought" and
   // "bought and spent it all" are the same answer to the voter: nothing left).
   byEmail: publicProcedure
@@ -70,10 +91,9 @@ export const publicVoteBalanceRouter = createTRPCRouter({
       const purchased = row?.purchased ?? 0
       const spent = row?.spent ?? 0
       return {
-        purchased,
-        spent,
         // Clamped, so a row that somehow went negative shows "nothing left"
-        // rather than a negative number of votes on a public page.
+        // rather than a negative number of votes on a public page. The two
+        // figures it is derived from stay on the server — see the note above.
         remaining: Math.max(0, purchased - spent),
       }
     }),

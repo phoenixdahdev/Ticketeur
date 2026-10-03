@@ -102,7 +102,9 @@ function applicationBlocked(block: ApplicationBlock): TRPCError {
 // rejected) — and a form rejected for asking applicants for sensitive data
 // must not stay reachable. A deny-list (`status <> 'draft'`) would publish
 // every new status by default; this one hides it until it's added here.
-async function loadPublicForm(db: Database, match: SQL) {
+// Exported so form discovery runs through the SAME gate rather than copying
+// its conditions — the drift this comment exists to prevent.
+export async function loadPublicForm(db: Database, match: SQL) {
   const [row] = await db
     .select({
       form: forms,
@@ -132,7 +134,7 @@ async function loadPublicForm(db: Database, match: SQL) {
   return row ?? null
 }
 
-function loadPriceOptions(db: Database, formId: string) {
+export function loadPriceOptions(db: Database, formId: string) {
   return db
     .select()
     .from(formPriceOptions)
@@ -415,7 +417,9 @@ export const publicFormsRouter = createTRPCRouter({
             },
             customizations: {
               title: event.title,
-              description: option ? `${form.title}: ${option.name}` : form.title,
+              description: option
+                ? `${form.title}: ${option.name}`
+                : form.title,
             },
           })
           paymentUrl = link

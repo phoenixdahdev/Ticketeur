@@ -8,6 +8,7 @@ import { publicReviewsRouter } from './reviews'
 import { publicVouchersRouter } from './vouchers'
 import { publicFormsRouter } from './forms'
 import { publicVoteCheckoutRouter } from './vote-checkout'
+import { publicVoteFreeRouter } from './vote-free'
 
 export const publicRouter = createTRPCRouter({
   checkout: publicCheckoutRouter,
@@ -18,6 +19,7 @@ export const publicRouter = createTRPCRouter({
   forms: publicFormsRouter,
   contests: publicContestsRouter,
   voteCheckout: publicVoteCheckoutRouter,
+  voteFree: publicVoteFreeRouter,
 })
 
 export type PublicRouter = typeof publicRouter

@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm'
 import { contests, db, events, orders } from '@ticketur/db'
 
 import { toFlutterwaveAmount } from './payment-amount'
+import { VOTE_CODE_TTL_MINUTES } from './vote-otp'
 
 // The receipt a voter gets once their vote purchase clears
 // (packages/jobs/src/tasks/send-vote-purchase.ts).
@@ -77,6 +78,50 @@ export async function sendVotePurchaseReceipt(
   } catch (err) {
     console.error('[votes] could not queue the vote purchase receipt', {
       orderId,
+      error: err,
+    })
+  }
+}
+
+// ─── The free-vote code ────────────────────────────────────────────────────
+
+/**
+ * Email a free voter their one-time code
+ * (packages/jobs/src/tasks/send-vote-code.ts).
+ *
+ * Unlike the receipt above this takes its content from the caller rather than
+ * re-reading a row, for one reason: the CODE only ever exists in memory.
+ * `vote_otps` stores a scrypt digest, so there is nothing to load it back
+ * from — re-reading would be impossible, not merely wasteful. The contest and
+ * event titles come from the row the caller already resolved through
+ * `loadPublicContest`, so they are no less trustworthy for arriving as
+ * arguments.
+ *
+ * Never throws. The digest is already committed by the time this runs, so a
+ * failed enqueue must leave the voter able to ask for another code rather
+ * than turn the request itself into an error they cannot act on.
+ */
+export async function sendVoteCode(args: {
+  email: string
+  code: string
+  contestTitle: string
+  eventTitle: string
+  contestUrl: string
+}): Promise<void> {
+  try {
+    if (args.email.trim() === '') return
+    await tasks.trigger('send-vote-code', {
+      email: args.email,
+      code: args.code,
+      contestTitle: args.contestTitle,
+      eventTitle: args.eventTitle,
+      contestUrl: args.contestUrl,
+      expiresInMinutes: VOTE_CODE_TTL_MINUTES,
+    })
+  } catch (err) {
+    // Logs no code and no address — only enough to find the request again.
+    console.error('[votes] could not queue the free-vote code email', {
+      contestTitle: args.contestTitle,
       error: err,
     })
   }

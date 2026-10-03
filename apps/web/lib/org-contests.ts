@@ -1,5 +1,5 @@
 import type { RouterOutputs } from '@ticketur/api'
-import type { ContestStatus, EntryStatus } from '@ticketur/db'
+import type { ContestStatus, EntryStatus, NominationStatus } from '@ticketur/db'
 
 import { formatDateTime } from '@/lib/org-forms'
 
@@ -28,6 +28,9 @@ export type ContestEntry = ContestDetail['entries'][number]
 export type VoteBundle = ContestDetail['bundles'][number]
 export type EligibleSubmission =
   RouterOutputs['org']['contests']['entries']['eligibleSubmissions'][number]
+export type ContestNominations =
+  RouterOutputs['org']['contests']['nominations']['list']
+export type ContestNomination = ContestNominations['nominations'][number]
 
 /**
  * What every content mutation reports back: whether saving stopped the
@@ -115,6 +118,31 @@ export const ENTRY_STATUS_MEANING: Record<EntryStatus, string> = {
     'The contestant pulled out. Off the ballot; the votes already cast still stand.',
   disqualified:
     'Removed by you. Off the ballot; the votes already cast still stand.',
+}
+
+// ─── Nominations ────────────────────────────────────────────────────────────
+
+// A nomination is never public. These words are read by the organizer alone,
+// so they describe the DECISION rather than what a visitor would see.
+export const NOMINATION_STATUS_LABEL: Record<NominationStatus, string> = {
+  pending: 'Waiting on you',
+  approved: 'Accepted',
+  rejected: 'Turned down',
+}
+
+export const NOMINATION_STATUS_TONE: Record<NominationStatus, string> = {
+  pending:
+    'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400',
+  approved:
+    'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400',
+  rejected: 'bg-muted text-muted-foreground',
+}
+
+export const NOMINATION_STATUS_MEANING: Record<NominationStatus, string> = {
+  pending: 'Nobody has decided about this name yet.',
+  approved:
+    'You accepted this name. Add them to the ballot when you are ready.',
+  rejected: 'You turned this name down. Nobody is told.',
 }
 
 // ─── Money (minor units) ────────────────────────────────────────────────────

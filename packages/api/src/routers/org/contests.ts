@@ -48,6 +48,7 @@ import {
 
 import { orgContestCategoriesRouter } from './contest-categories'
 import { orgContestEntriesRouter } from './contest-entries'
+import { orgContestNominationsRouter } from './contest-nominations'
 import { orgVoteBundlesRouter } from './vote-bundles'
 
 // The organizer's side of contests and voting: building one, getting it
@@ -559,6 +560,7 @@ export const orgContestsRouter = createTRPCRouter({
     }),
 
   categories: orgContestCategoriesRouter,
+  nominations: orgContestNominationsRouter,
   entries: orgContestEntriesRouter,
   bundles: orgVoteBundlesRouter,
 })
